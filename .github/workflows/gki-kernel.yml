@@ -401,7 +401,7 @@ jobs:
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-      - name: 强制内核版本仅显示 x.x.xx
+      - name: 彻底移除 AOSP 分支信息并仅保留 x.x.xx
         run: |
           cd "$CONFIG"
           echo "CONFIG_LOCALVERSION=\"\"" >> ./common/arch/arm64/configs/gki_defconfig
@@ -414,13 +414,14 @@ jobs:
           if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
             sed -i -e "s|\$(preempt-flag-y) \".*\"|\$(preempt-flag-y) \"$(date -u +\"%a %b %d %H:%M:%S UTC %Y\")\"|" ./common/init/Makefile
           fi
-          if [ -f "build/build.sh" ]; then
-            sed -i '/-dirty/d' ./common/scripts/setlocalversion
-          else
-            rm -rf ./common/android/abi_gki_protected_exports_*
-            sed -i '/protected_exports_list/d' ./common/BUILD.bazel
-            sed -i '/stable_scmversion_cmd/d' ./build/kernel/kleaf/impl/stamp.bzl
-          fi
+          rm -rf ./common/android/abi_gki_protected_exports_*
+          sed -i '/protected_exports_list/d' ./common/BUILD.bazel
+          sed -i '/stable_scmversion_cmd/d' ./build/kernel/kleaf/impl/stamp.bzl
+          sed -i '/-dirty/d' ./common/scripts/setlocalversion
+          sed -i '/android.*gki/d' ./common/build.config.gki*
+          sed -i '/KMI_SYMBOL_LIST/d' ./common/build.config.gki*
+          sed -i '/MODULES_ORDER/d' ./common/build.config.gki*
+          sed -i '/android\/gki/d' ./common/modules.bzl
 
       - name: Build with retry
         uses: nick-fields/retry@v3
@@ -433,8 +434,6 @@ jobs:
             set -x
             cd "$CONFIG"
             sed -i 's/BUILD_SYSTEM_DLKM=1/BUILD_SYSTEM_DLKM=0/' common/build.config.gki.aarch64
-            sed -i '/MODULES_ORDER=android\/gki_aarch64_modules/d' common/build.config.gki.aarch64
-            sed -i '/KMI_SYMBOL_LIST_STRICT_MODE/d' common/build.config.gki.aarch64
             if [ -f "build/build.sh" ]; then
               LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh CC="/usr/bin/ccache clang" || exit 1
             else
