@@ -120,12 +120,12 @@ jobs:
           echo "MKBOOTIMG=$GITHUB_WORKSPACE/mkbootimg/mkbootimg.py" >> $GITHUB_ENV
           echo "UNPACK_BOOTIMG=$GITHUB_WORKSPACE/mkbootimg/unpack_bootimg.py" >> $GITHUB_ENV
 
-      - name: 密钥设置
+      - name: 密钥设置——已经过mkppk修改
         env:
           BOOT_SIGN_KEY: ${{ secrets.BOOT_SIGN_KEY }}
         run: |
-          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 > ./kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem
-          echo "BOOT_SIGN_KEY_PATH=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem" >> $GITHUB_ENV
+            openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 > ./kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem
+            echo "BOOT_SIGN_KEY_PATH=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem" >> $GITHUB_ENV
 
       - name: 安装仓库
         run: |
@@ -154,6 +154,7 @@ jobs:
           if grep -q deprecated <<< $REMOTE_BRANCH; then
             sed -i "s/\"${FORMATTED_BRANCH}\"/\"deprecated\/${FORMATTED_BRANCH}\"/g" $DEFAULT_MANIFEST_PATH
           fi
+          $REPO --version
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
           FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}"
@@ -213,7 +214,7 @@ jobs:
           fi
 
       - name: 添加 Baseband-guard 支持
-        if: ${{ inputs.BBG == 'true' }}
+        if: ${{ github.event.inputs.BBG == 'true' }}
         run: |
           cd "$CONFIG/common"
           wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
@@ -355,6 +356,12 @@ jobs:
             echo "CONFIG_ZRAM_WRITEBACK=y" >> "$CONFIG_FILE"
           fi
 
+      - name: 设置BBR为默认拥塞算法
+        if: ${{ inputs.set_defbbr }}
+        run: |
+          CONFIG_FILE="$CONFIG/common/arch/arm64/configs/gki_defconfig"
+          echo "CONFIG_DEFAULT_BBR=y" >> "$CONFIG_FILE"
+
       - name: 添加SUSFS配置设置
         run: |
           cd "$CONFIG"
@@ -400,37 +407,29 @@ jobs:
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-      - name: 彻底移除内核版本分支信息（仅显示 x.x.xx）
+      - name: 配置内核名称
         run: |
           cd "$CONFIG"
-          
-          # 1. 强制版本号为 sub_level（如 6.6.66）
-          KERNEL_VERSION="${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
-          echo "KERNEL_VERSION=$KERNEL_VERSION" >> $GITHUB_ENV
-
-          # 2. 清空 setlocalversion 输出（移除 -g<hash>）
+          if [ ! -z ${{ inputs.version }} ]; then
+            sed -i '$s|echo "\$res"|echo "${{ inputs.version }}"|' ./common/scripts/setlocalversion
+          else
+            sed -i '$s|echo "\$res"|echo "\$res-zakozakoooooo-1145141919"|' ./common/scripts/setlocalversion
+          fi
+          CURRENT_TIME=$(date -u +"%a %b %d %H:%M:%S UTC %Y")
+          perl -pi -e "s{UTS_VERSION=\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\| cut -b -\\\$UTS_LEN\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
+          if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
+            sed -i -e "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"$CURRENT_TIME\"|" ./common/init/Makefile
+          fi
           if [ -f "build/build.sh" ]; then
-            sed -i '/echo "$res"/c\echo ""' ./common/scripts/setlocalversion
             sed -i 's/-dirty//' ./common/scripts/setlocalversion
           else
-            sed -i '/echo "$res"/c\echo ""' ./scripts/setlocalversion
-          fi
-
-          # 3. 固定编译时间（避免随机时间）
-          CURRENT_TIME=$(date -u +"%a %b %d %H:%M:%S UTC %Y")
-          perl -pi -e "s{UTS_VERSION=\".+\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
-
-          # 4. 6.x Bazel 额外清理
-          if [ ! -f "build/build.sh" ]; then
-            sed -i "s/build-timestamp = .*/build-timestamp = \"$CURRENT_TIME\"/" ./common/init/Makefile
-            sed -i '/protected_exports_list/d' ./common/BUILD.bazel
+            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
             rm -rf ./common/android/abi_gki_protected_exports_*
-            sed -i 's/"kmi_symbol_list_strict_mode": True,/"kmi_symbol_list_strict_mode": False,/g' ./common/BUILD.bazel
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
+            if [ ! -z ${{ inputs.version }} ]; then
+              sed -i '/^CONFIG_LOCALVERSION=/ s/="\([^"]*\)"/="${{ inputs.version }}"/' ./common/arch/arm64/configs/gki_defconfig
+            fi
           fi
-
-          # 5. 强制 CONFIG_LOCALVERSION 为空
-          sed -i '/^CONFIG_LOCALVERSION=/c\CONFIG_LOCALVERSION=""' ./common/arch/arm64/configs/gki_defconfig
 
       - name: Build with retry
         uses: nick-fields/retry@v3
@@ -501,15 +500,15 @@ jobs:
       - name: 去除 AOSP 分支信息并创建 ZIP
         run: |
           cd ./AnyKernel3
-          VERSION="${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
+          BASE_NAME="${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}"
           mv ../Image ./Image
-          zip -r "../${VERSION}-AnyKernel3.zip" ./*
+          zip -r "../${BASE_NAME}-AnyKernel3.zip" ./*
           rm ./Image
           mv ../Image.lz4 ./Image.lz4
-          zip -r "../${VERSION}-AnyKernel3-lz4.zip" ./*
+          zip -r "../${BASE_NAME}-AnyKernel3-lz4.zip" ./*
           rm ./Image.lz4
           mv ../Image.gz ./Image.gz
-          zip -r "../${VERSION}-AnyKernel3-gz.zip" ./*
+          zip -r "../${BASE_NAME}-AnyKernel3-gz.zip" ./*
           rm ./Image.gz
 
       - name: 运行boot镜像 ${{ inputs.android_version }} 编译脚本
@@ -527,32 +526,32 @@ jobs:
           unzip gki-kernel.zip && rm gki-kernel.zip
           $UNPACK_BOOTIMG --boot_img="$(pwd)/boot-5.10.img"
           gzip -n -k -f -9 ./Image > ./Image.gz
-          VERSION="${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
+          BASE_NAME="${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}"
           $MKBOOTIMG --header_version 4 --kernel Image --output boot.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot.img ../${VERSION}-boot.img
+          cp ./boot.img ../${BASE_NAME}-boot.img
           $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-gz.img ../${VERSION}-boot-gz.img
+          cp ./boot-gz.img ../${BASE_NAME}-boot-gz.img
           $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-lz4.img ../${VERSION}-boot-lz4.img
+          cp ./boot-lz4.img ../${BASE_NAME}-boot-lz4.img
 
       - name: 运行boot镜像 ${{ inputs.android_version }} 编译脚本
         if: ${{ inputs.android_version == 'android13' || inputs.android_version == 'android14' || inputs.android_version == 'android15' }}
         run: |
           cd bootimgs
           gzip -n -k -f -9 ./Image > ./Image.gz
-          VERSION="${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
+          BASE_NAME="${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}"
           $MKBOOTIMG --header_version 4 --kernel Image --output boot.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot.img ../${VERSION}-boot.img
+          cp ./boot.img ../${BASE_NAME}-boot.img
           $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-gz.img ../${VERSION}-boot-gz.img
+          cp ./boot-gz.img ../${BASE_NAME}-boot-gz.img
           $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-lz4.img ../${VERSION}-boot-lz4.img
+          cp ./boot-lz4.img ../${BASE_NAME}-boot-lz4.img
 
       - name: 上传编译资产
         uses: actions/upload-artifact@v4
