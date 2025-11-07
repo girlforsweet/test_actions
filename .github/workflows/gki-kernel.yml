@@ -50,10 +50,6 @@ on:
         required: true
         type: boolean
         default: false
-      set_defbbr:
-        required: false
-        type: boolean
-        default: false
 
 jobs:
   build-kernel-kernelsu-susfs:
@@ -158,7 +154,6 @@ jobs:
           if grep -q deprecated <<< $REMOTE_BRANCH; then
             sed -i "s/\"${FORMATTED_BRANCH}\"/\"deprecated\/${FORMATTED_BRANCH}\"/g" $DEFAULT_MANIFEST_PATH
           fi
-          $REPO --version
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
           FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}"
@@ -191,8 +186,8 @@ jobs:
               case "$variant_input" in
                 "Official" | "MKSU") echo "BRANCH=-s main" >> $GITHUB_ENV ;;
                 "Next")              echo "BRANCH=-s next-susfs-dev" >> $GITHUB_ENV ;;
-                "SukiSU")            echo "BRANCH=-s susfs-test" >> $GITHUB_ENV ;;
-                *)
+                "SukiSU")           echo "BRANCH=-s susfs-test" >> $GITHUB_ENV ;;
+                *) 
                   echo "错误：未定义开发分支的变体 '$variant_input'" >&2
                   exit 1
                   ;;
@@ -265,7 +260,7 @@ jobs:
           fake_patched=0
           if [ "$FORMATTED_BRANCH" = "android15-6.6" ]; then
             if ! grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
-              sed -i -e '/int ret = 0, copied = 0;/a \tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' -e '/int ret = 0, copied = 0;/a \tpagemap_entry_t *res = NULL;' ./fs/proc/task_mmu.c
+              sed -i -e '/int ret = 0, copied = 0;/a \\tunsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;' -e '/int ret = 0, copied = 0;/a \\tpagemap_entry_t \*res = NULL;' ./fs/proc/task_mmu.c
               fake_patched=1
             fi
           fi
@@ -277,7 +272,7 @@ jobs:
           if [ "$fake_patched" = 1 ]; then
             if [ "$FORMATTED_BRANCH" = "android15-6.6" ]; then
               if grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
-                sed -i -e '/unsigned int nr_subpages = __PAGE_SIZE \/ PAGE_SIZE;/d' -e '/pagemap_entry_t *res = NULL;/d' ./fs/proc/task_mmu.c
+                sed -i -e '/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' -e '/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c
               fi
             fi
             if [ "$FORMATTED_BRANCH" = "android12-5.10" ] || [ "$FORMATTED_BRANCH" = "android13-5.10" ] || [ "$FORMATTED_BRANCH" = "android13-5.15" ]; then
@@ -337,9 +332,9 @@ jobs:
           fi
           if [ "${{ inputs.kernel_version }}" != "6.6" ] && [ "${{ inputs.kernel_version }}" != "5.10" ]; then
             if grep -q "CONFIG_ZSMALLOC" -- "$CONFIG_FILE"; then
-              sed -i 's/CONFIG_ZSMALLOC=m/CONFIG_ZSMALLOC=y/g' "$CONFIG_FILE"
+                sed -i 's/CONFIG_ZSMALLOC=m/CONFIG_ZSMALLOC=y/g' "$CONFIG_FILE"
             else
-              echo "CONFIG_ZSMALLOC=y" >> "$CONFIG_FILE"
+                echo "CONFIG_ZSMALLOC=y" >> "$CONFIG_FILE"
             fi
             sed -i 's/CONFIG_ZRAM=m/CONFIG_ZRAM=y/g' "$CONFIG_FILE"
           fi
@@ -359,12 +354,6 @@ jobs:
             echo "CONFIG_CRYPTO_LZ4K_OPLUS=y" >> "$CONFIG_FILE"
             echo "CONFIG_ZRAM_WRITEBACK=y" >> "$CONFIG_FILE"
           fi
-
-      - name: 设置BBR为默认拥塞算法
-        if: ${{ inputs.set_defbbr }}
-        run: |
-          CONFIG_FILE="$CONFIG/common/arch/arm64/configs/gki_defconfig"
-          echo "CONFIG_DEFAULT_BBR=y" >> "$CONFIG_FILE"
 
       - name: 添加SUSFS配置设置
         run: |
@@ -411,41 +400,37 @@ jobs:
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-      - name: 配置内核名称（去除 AOSP 分支信息）
+      - name: 彻底移除内核版本分支信息（仅显示 x.x.xx）
         run: |
           cd "$CONFIG"
+          
+          # 1. 强制版本号为 sub_level（如 6.6.66）
+          KERNEL_VERSION="${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
+          echo "KERNEL_VERSION=$KERNEL_VERSION" >> $GITHUB_ENV
 
-          # 1. setlocalversion → 只输出自定义版本或 kernel_version.sub_level
-          if [ -n "${{ inputs.version }}" ]; then
-            echo 'echo "${{ inputs.version }}"' > ./common/scripts/setlocalversion
-          else
-            echo 'echo "${{ inputs.kernel_version }}.${{ inputs.sub_level }}"' > ./common/scripts/setlocalversion
-          fi
-          chmod +x ./common/scripts/setlocalversion
-
-          # 2. mkcompile_h → 固定时间戳
-          CURRENT_TIME=$(date -u +"%a %b %d %H:%M:%S UTC %Y")
-          perl -pi -e "s{UTS_VERSION=\".*\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
-
-          # 3. 6.1/6.6 init/Makefile
-          if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
-            sed -i -e "s|\$(preempt-flag-y) \".*\"|\$(preempt-flag-y) \"$CURRENT_TIME\"|" ./common/init/Makefile
-          fi
-
-          # 4. build.sh 路径去掉 -dirty
+          # 2. 清空 setlocalversion 输出（移除 -g<hash>）
           if [ -f "build/build.sh" ]; then
+            sed -i '/echo "$res"/c\echo ""' ./common/scripts/setlocalversion
             sed -i 's/-dirty//' ./common/scripts/setlocalversion
+          else
+            sed -i '/echo "$res"/c\echo ""' ./scripts/setlocalversion
           fi
 
-          # 5. Bazel 路径清理
+          # 3. 固定编译时间（避免随机时间）
+          CURRENT_TIME=$(date -u +"%a %b %d %H:%M:%S UTC %Y")
+          perl -pi -e "s{UTS_VERSION=\".+\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
+
+          # 4. 6.x Bazel 额外清理
           if [ ! -f "build/build.sh" ]; then
-            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
+            sed -i "s/build-timestamp = .*/build-timestamp = \"$CURRENT_TIME\"/" ./common/init/Makefile
+            sed -i '/protected_exports_list/d' ./common/BUILD.bazel
             rm -rf ./common/android/abi_gki_protected_exports_*
+            sed -i 's/"kmi_symbol_list_strict_mode": True,/"kmi_symbol_list_strict_mode": False,/g' ./common/BUILD.bazel
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
-            if [ -n "${{ inputs.version }}" ]; then
-              sed -i '/^CONFIG_LOCALVERSION=/ s/=.*/="${{ inputs.version }}"/' ./common/arch/arm64/configs/gki_defconfig
-            fi
           fi
+
+          # 5. 强制 CONFIG_LOCALVERSION 为空
+          sed -i '/^CONFIG_LOCALVERSION=/c\CONFIG_LOCALVERSION=""' ./common/arch/arm64/configs/gki_defconfig
 
       - name: Build with retry
         uses: nick-fields/retry@v3
@@ -493,7 +478,7 @@ jobs:
             cd ../../..
           fi
 
-      - name: 创建Bootimgs文件夹并复制镜像 (A12/A13)
+      - name: 创建Bootimgs文件夹并复制镜像
         if: ${{ inputs.android_version == 'android12' || inputs.android_version == 'android13' }}
         run: |
           mkdir bootimgs
@@ -503,7 +488,7 @@ jobs:
           cp ./$CONFIG/out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist/Image.lz4 ./
           gzip -n -k -f -9 ./Image > ./Image.gz
 
-      - name: 创建Bootimgs文件夹并复制镜像 (A14/A15)
+      - name: 创建Bootimgs文件夹并复制镜像
         if: ${{ inputs.android_version == 'android14' || inputs.android_version == 'android15' }}
         run: |
           mkdir bootimgs
@@ -516,18 +501,18 @@ jobs:
       - name: 去除 AOSP 分支信息并创建 ZIP
         run: |
           cd ./AnyKernel3
-          BASE_NAME="${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}"
+          VERSION="${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
           mv ../Image ./Image
-          zip -r "../${BASE_NAME}-AnyKernel3.zip" ./*
+          zip -r "../${VERSION}-AnyKernel3.zip" ./*
           rm ./Image
           mv ../Image.lz4 ./Image.lz4
-          zip -r "../${BASE_NAME}-AnyKernel3-lz4.zip" ./*
+          zip -r "../${VERSION}-AnyKernel3-lz4.zip" ./*
           rm ./Image.lz4
           mv ../Image.gz ./Image.gz
-          zip -r "../${BASE_NAME}-AnyKernel3-gz.zip" ./*
+          zip -r "../${VERSION}-AnyKernel3-gz.zip" ./*
           rm ./Image.gz
 
-      - name: 运行boot镜像编译脚本 (Android 12)
+      - name: 运行boot镜像 ${{ inputs.android_version }} 编译脚本
         if: ${{ inputs.android_version == 'android12' }}
         run: |
           cd bootimgs
@@ -535,39 +520,39 @@ jobs:
           FALLBACK_URL=https://dl.google.com/android/gki/gki-certified-boot-android12-5.10-2023-01_r1.zip
           status=$(curl -sL -w "%{http_code}" "$GKI_URL" -o /dev/null)
           if [ "$status" = "200" ]; then
-            curl -Lo gki-kernel.zip "$GKI_URL"
+              curl -Lo gki-kernel.zip "$GKI_URL"
           else
-            curl -Lo gki-kernel.zip "$FALLBACK_URL"
+              curl -Lo gki-kernel.zip "$FALLBACK_URL"
           fi
           unzip gki-kernel.zip && rm gki-kernel.zip
           $UNPACK_BOOTIMG --boot_img="$(pwd)/boot-5.10.img"
           gzip -n -k -f -9 ./Image > ./Image.gz
-          BASE_NAME="${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}"
+          VERSION="${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
           $MKBOOTIMG --header_version 4 --kernel Image --output boot.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot.img ../${BASE_NAME}-boot.img
+          cp ./boot.img ../${VERSION}-boot.img
           $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-gz.img ../${BASE_NAME}-boot-gz.img
+          cp ./boot-gz.img ../${VERSION}-boot-gz.img
           $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-lz4.img ../${BASE_NAME}-boot-lz4.img
+          cp ./boot-lz4.img ../${VERSION}-boot-lz4.img
 
-      - name: 运行boot镜像编译脚本 (Android 13/14/15)
+      - name: 运行boot镜像 ${{ inputs.android_version }} 编译脚本
         if: ${{ inputs.android_version == 'android13' || inputs.android_version == 'android14' || inputs.android_version == 'android15' }}
         run: |
           cd bootimgs
           gzip -n -k -f -9 ./Image > ./Image.gz
-          BASE_NAME="${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}"
+          VERSION="${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
           $MKBOOTIMG --header_version 4 --kernel Image --output boot.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot.img ../${BASE_NAME}-boot.img
+          cp ./boot.img ../${VERSION}-boot.img
           $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-gz.img ../${BASE_NAME}-boot-gz.img
+          cp ./boot-gz.img ../${VERSION}-boot-gz.img
           $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-lz4.img ../${BASE_NAME}-boot-lz4.img
+          cp ./boot-lz4.img ../${VERSION}-boot-lz4.img
 
       - name: 上传编译资产
         uses: actions/upload-artifact@v4
