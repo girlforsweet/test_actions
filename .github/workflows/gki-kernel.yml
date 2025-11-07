@@ -190,11 +190,8 @@ jobs:
             "Dev(开发)")
               case "$variant_input" in
                 "Official" | "MKSU") echo "BRANCH=-s main" >> $GITHUB_ENV ;;
-
-                "Next")          echo "BRANCH=-s next-susfs-dev" >> $GITHUB_ENV ;;
-
-                "SukiSU")        echo "BRANCH=-s susfs-test" >> $GITHUB_ENV ;;
-
+                "Next")              echo "BRANCH=-s next-susfs-dev" >> $GITHUB_ENV ;;
+                "SukiSU")            echo "BRANCH=-s susfs-test" >> $GITHUB_ENV ;;
                 *)
                   echo "错误：未定义开发分支的变体 '$variant_input'" >&2
                   exit 1
@@ -213,7 +210,7 @@ jobs:
           if [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
             curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash $BRANCH
           elif [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
-            curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next-susfs/kernel/setup.sh" | bash $BRASH
+            curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next-susfs/kernel/setup.sh" | bash $BRANCH
           elif [ "${{ inputs.kernelsu_variant }}" == "MKSU" ]; then
             curl -LSs "https://raw.githubusercontent.com/5ec1cff/KernelSU/main/kernel/setup.sh" | bash $BRANCH
           elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
@@ -268,7 +265,7 @@ jobs:
           fake_patched=0
           if [ "$FORMATTED_BRANCH" = "android15-6.6" ]; then
             if ! grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
-              sed -i -e '/int ret = 0, copied = 0;/a \tunsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;' -e '/int ret = 0, copied = 0;/a \pagemap_entry_t \*res = NULL;' ./fs/proc/task_mmu.c
+              sed -i -e '/int ret = 0, copied = 0;/a \tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' -e '/int ret = 0, copied = 0;/a \tpagemap_entry_t *res = NULL;' ./fs/proc/task_mmu.c
               fake_patched=1
             fi
           fi
@@ -280,7 +277,7 @@ jobs:
           if [ "$fake_patched" = 1 ]; then
             if [ "$FORMATTED_BRANCH" = "android15-6.6" ]; then
               if grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
-                sed -i -e '/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' -e '/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c
+                sed -i -e '/unsigned int nr_subpages = __PAGE_SIZE \/ PAGE_SIZE;/d' -e '/pagemap_entry_t *res = NULL;/d' ./fs/proc/task_mmu.c
               fi
             fi
             if [ "$FORMATTED_BRANCH" = "android12-5.10" ] || [ "$FORMATTED_BRANCH" = "android13-5.10" ] || [ "$FORMATTED_BRANCH" = "android13-5.15" ]; then
@@ -414,23 +411,40 @@ jobs:
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-      - name: 配置内核名称（彻底去除 AOSP 分支信息）
+      - name: 配置内核名称（去除 AOSP 分支信息）
         run: |
           cd "$CONFIG"
-          CUSTOM_VER="${{ inputs.version }}"
-          if [ -z "$CUSTOM_VER" ]; then
-            CUSTOM_VER="GKI-${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
+
+          # 1. setlocalversion → 只输出自定义版本或 kernel_version.sub_level
+          if [ -n "${{ inputs.version }}" ]; then
+            echo 'echo "${{ inputs.version }}"' > ./common/scripts/setlocalversion
+          else
+            echo 'echo "${{ inputs.kernel_version }}.${{ inputs.sub_level }}"' > ./common/scripts/setlocalversion
           fi
-          cat > ./common/scripts/setlocalversion <<'EOF'
-          #!/bin/sh
-          echo "$CUSTOM_VER"
-          EOF
           chmod +x ./common/scripts/setlocalversion
 
+          # 2. mkcompile_h → 固定时间戳
           CURRENT_TIME=$(date -u +"%a %b %d %H:%M:%S UTC %Y")
-          perl -pi -e "s{UTS_VERSION=\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\| cut -b -\\\$UTS_LEN\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
+          perl -pi -e "s{UTS_VERSION=\".*\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
+
+          # 3. 6.1/6.6 init/Makefile
           if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
-            sed -i -e "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"$CURRENT_TIME\"|" ./common/init/Makefile
+            sed -i -e "s|\$(preempt-flag-y) \".*\"|\$(preempt-flag-y) \"$CURRENT_TIME\"|" ./common/init/Makefile
+          fi
+
+          # 4. build.sh 路径去掉 -dirty
+          if [ -f "build/build.sh" ]; then
+            sed -i 's/-dirty//' ./common/scripts/setlocalversion
+          fi
+
+          # 5. Bazel 路径清理
+          if [ ! -f "build/build.sh" ]; then
+            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
+            rm -rf ./common/android/abi_gki_protected_exports_*
+            sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
+            if [ -n "${{ inputs.version }}" ]; then
+              sed -i '/^CONFIG_LOCALVERSION=/ s/=.*/="${{ inputs.version }}"/' ./common/arch/arm64/configs/gki_defconfig
+            fi
           fi
 
       - name: Build with retry
@@ -521,9 +535,9 @@ jobs:
           FALLBACK_URL=https://dl.google.com/android/gki/gki-certified-boot-android12-5.10-2023-01_r1.zip
           status=$(curl -sL -w "%{http_code}" "$GKI_URL" -o /dev/null)
           if [ "$status" = "200" ]; then
-              curl -Lo gki-kernel.zip "$GKI_URL"
+            curl -Lo gki-kernel.zip "$GKI_URL"
           else
-              curl -Lo gki-kernel.zip "$FALLBACK_URL"
+            curl -Lo gki-kernel.zip "$FALLBACK_URL"
           fi
           unzip gki-kernel.zip && rm gki-kernel.zip
           $UNPACK_BOOTIMG --boot_img="$(pwd)/boot-5.10.img"
