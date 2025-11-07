@@ -15,7 +15,7 @@ on:
         description: 'Do you want to create a release?'
         required: true
         type: boolean
-        default: 
+        default: false
       kernels_to_build:
         description: |
           Comma-separated list of kernels to build/release, e.g.:
@@ -245,7 +245,7 @@ jobs:
     needs:
       - check-build-status
       - get_manager
-    if: always()
+    if: always() && needs.check-build-status.outputs.should_release == 'true'
     env:
       REPO_OWNER: ShirkNeko
       REPO_NAME: GKI_KernelSU_SUSFS
@@ -279,8 +279,8 @@ jobs:
     steps:
       - name: Conditional Release Check
         id: release_check
-        if: ${{ inputs.make_release && needs.check-build-status.outputs.should_release == 'true' }}
-        run: echo "Release conditions met. Proceeding with release."
+        # 由于 trigger-release 的 if 条件已经检查了 should_release，这里可以简化
+        run: echo "Release conditions met based on preceding job checks."
         
       - name: Checkout code
         if: ${{ steps.release_check.outcome == 'success' }}
@@ -340,190 +340,62 @@ jobs:
 
           echo "Tag $NEW_TAG created and pushed successfully" 
           
-      - name: Set KSU Version and Release Name
+      - name: Set KSU Version (Modified: Simplified Naming)
         if: ${{ steps.release_check.outcome == 'success' }}
         run: |
-          # Use temporary directories to avoid conflicts
+          # 简化 KSU 版本命名，只基于 Variant 和输入参数，不再获取外部仓库的动态 Commit 版本号
           if [ "${{ inputs.kernelsu_variant }}" = "Next" ]; then
-            echo "Processing Next variant"
-            git clone https://github.com/KernelSU-Next/KernelSU-Next.git ksu-next-tmp
-            cd ksu-next-tmp
-            KSU_GIT_VERSION=$(git rev-list --count HEAD)
-            KSU_VERSION=$((10000 + KSU_GIT_VERSION + 200))
-            echo "Next version: $KSU_VERSION"
-            cd ..
-            rm -rf ksu-next-tmp
-            echo "RELEASE_NAME=\"GKI Kernel: KernelSU-Next ($KSU_VERSION) & SUSFS v1.5.12\"" >> $GITHUB_ENV
+            echo "Processing Next variant - Using placeholder versioning."
+            # 移除动态 KSU_VERSION 计算
+            echo "RELEASE_NAME=\"GKI Kernel: KernelSU-Next & SUSFS v1.5.12\"" >> $GITHUB_ENV
             
           elif [ "${{ inputs.kernelsu_variant }}" = "SukiSU" ]; then
-            echo "Processing SukiSU variant"
-            git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git suki-tmp
-            cd suki-tmp
-            KSU_GIT_VERSION=$(git rev-list --count HEAD)
-            KSU_VERSION=$((10000 + KSU_GIT_VERSION + 700))
-            echo "SukiSU version: $KSU_VERSION"
-            cd ..
-            rm -rf suki-tmp
-            echo "RELEASE_NAME=\"GKI Kernel: SukiSU ($KSU_VERSION) & SUSFS v1.5.12\"" >> $GITHUB_ENV
+            echo "Processing SukiSU variant - Using placeholder versioning."
+            # 移除动态 KSU_VERSION 计算
+            echo "RELEASE_NAME=\"GKI Kernel: SukiSU & SUSFS v1.5.12\"" >> $GITHUB_ENV
             
           else
             echo "Using default naming for variant: ${{ inputs.kernelsu_variant }}"
             echo "RELEASE_NAME=\"GKI Kernel: ${{ inputs.kernelsu_variant }} & SUSFS v1.5.12\"" >> $GITHUB_ENV
           fi
           
-      - name: Fetch KSU and SUSFS Commit Info
+      - name: Fetch KSU and SUSFS Commit Info (REMOVED - Branch/Commit Info stripped)
         id: build_notes
         if: ${{ steps.release_check.outcome == 'success' }}
         run: |
-          # Handle 'Other' branch selection
-          if [[ "${{ inputs.kernelsu_branch }}" == "Other(其他/指定)" ]]; then
-            echo "Using custom branch selection"
-            if [[ "${{ inputs.kernelsu_variant }}" == "Official" ]]; then
-              KSU_BRANCH="main"
-            elif [[ "${{ inputs.kernelsu_variant }}" == "Next" ]]; then
-              KSU_BRANCH="next"
-            else
-              KSU_BRANCH="main"  # Default for MKSU/SukiSU
-            fi
-          elif [[ "${{ inputs.kernelsu_branch }}" == "Dev(开发)" || "${{ inputs.kernelsu_variant }}" == "MKSU" || "${{ inputs.kernelsu_variant }}" == "SukiSU" ]]; then
-            if [[ "${{ inputs.kernelsu_variant }}" == "Official" || "${{ inputs.kernelsu_variant }}" == "MKSU" || "${{ inputs.kernelsu_variant }}" == "SukiSU" ]]; then
-              KSU_BRANCH="main"
-            elif [[ "${{ inputs.kernelsu_variant }}" == "Next" ]]; then
-              KSU_BRANCH="next"
-            fi
-          elif [[ "${{ inputs.kernelsu_branch }}" == "Stable(标准)" && "${{ inputs.kernelsu_variant }}" != "MKSU" ]]; then
-            KSU_REPO_URL=""
-            if [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
-              KSU_REPO_URL="https://github.com/tiann/KernelSU.git"
-            elif [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
-              KSU_REPO_URL="https://github.com/KernelSU-Next/KernelSU-Next.git"
-            elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-              KSU_REPO_URL="https://github.com/ShirkNeko/KernelSU.git"
-            fi
-            
-            if [ -n "$KSU_REPO_URL" ]; then
-              TAG=$(git ls-remote --tags --sort=-v:refname "$KSU_REPO_URL" | grep -o 'refs/tags/.*' | cut -d'/' -f3 | head -n1)
-              KSU_BRANCH="${TAG:-UNKNOWN_TAG}"
-            else
-              KSU_BRANCH="main"
-            fi
-          fi
+          echo "KernelSU and SUSFS commit/branch information gathering has been intentionally removed from release notes."
           
-          echo "KSU_BRANCH=$KSU_BRANCH" >> $GITHUB_ENV
+          # 仅保留 INITIAL_RELEASE_NOTES 中静态或基于输入的部分，并设置为空字符串，以确保没有动态信息
+          FINAL_RELEASE_NOTES=$(cat <<EOF
+          This release includes **${{ inputs.kernelsu_variant == 'Next' && 'KernelSU' || '' }}${{ inputs.kernelsu_variant }}**
           
-          KSU_REPO_URL=""
-          KSU_REPO_URL2=""
-          if [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
-            KSU_REPO_URL="https://github.com/tiann/KernelSU.git"
-            KSU_REPO_URL2="tiann/KernelSU"
-          elif [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
-            KSU_REPO_URL="https://github.com/KernelSU-Next/KernelSU-Next.git"
-            KSU_REPO_URL2="KernelSU-Next/KernelSU-Next"
-          elif [ "${{ inputs.kernelsu_variant }}" == "MKSU" ]; then
-            KSU_REPO_URL="https://github.com/5ec1cff/KernelSU.git"
-            KSU_REPO_URL2="5ec1cff/KernelSU"
-          elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-            KSU_REPO_URL="https://github.com/ShirkNeko/KernelSU.git"
-            KSU_REPO_URL2="ShirkNeko/KernelSU"
-          else
-            echo "Warning: Unknown KernelSU variant selected. Defaulting to Official for URL generation."
-            KSU_REPO_URL="https://github.com/tiann/KernelSU.git"
-            KSU_REPO_URL2="tiann/KernelSU"
-          fi
+          Features:
+          -> ${{ inputs.kernelsu_variant == 'Next' && 'KernelSU-' || '' }}${{ inputs.kernelsu_variant }}-${{ inputs.kernelsu_branch }}
+          -> SUSFS ඞ v1.5.12
+          -> Manual Syscall Hooks for better hiding
+          -> Magic Mount Support
+          -> Simple hiding for LineageOS detection
+          -> Futile hiding for jit-zygote-cache detection
+          -> Wireguard Support
+          -> BBR Support
+          ${{ inputs.BBG && '-> BBG Support' || '' }}
+          -> BBG ${{ inputs.BBG && 'supported' || 'not supported' }}
+          ${{ inputs.use_kpm && '-> KPM Support' || '' }}
+          -> **LZ4KD&ONEPLUS_LZ4K** ${{ inputs.use_zram && 'supported' || 'not supported' }}
           
-          KSU_REF=""
-          KSU_URL=""
-          if [[ "${{ inputs.kernelsu_branch }}" == "Stable(标准)" && "${{ inputs.kernelsu_variant }}" != "MKSU" ]]; then
-            TAG=$(git ls-remote --tags --sort=-v:refname "$KSU_REPO_URL" | grep -o 'refs/tags/.*' | cut -d'/' -f3 | head -n1)
-            KSU_REF="${TAG:-UNKNOWN_TAG}"
-            KSU_URL="https://github.com/$KSU_REPO_URL2/releases/tag/$KSU_REF"
-          elif [[ -n "$KSU_BRANCH" ]]; then
-            COMMIT_HASH=$(git ls-remote "$KSU_REPO_URL" "refs/heads/$KSU_BRANCH" | awk '{ print $1 }')
-            KSU_REF="${COMMIT_HASH:-UNKNOWN_COMMIT}"
-            KSU_URL="https://github.com/$KSU_REPO_URL2/commit/$KSU_REF"
-          else
-            echo "Error: KSU branch could not be determined. KSU commit information will be incomplete." >&2
-          fi
+          <details>
+          <summary>Notes:</summary>
+          - -> In SUS SU Mode 2, it will show as disabled or incompatible, the reason is that non-kprobe hooks were used (when compiling the kernel), and non-kprobe hooks are no longer needed!
+          - -> In the latest version of susfs, flashing AK3 compressed package with Kernel Flasher will brick your device, try [Horizon Kernel Flasher]\(https://github.com/libxzr/HorizonKernelFlasher)!
+          </details>
           
-          FINAL_RELEASE_NOTES="${{ env.INITIAL_RELEASE_NOTES }}"
+          Modules:
+          -> https://github.com/sidex15/ksu_module_susfs
           
-          if [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
-            FINAL_RELEASE_NOTES+="\nOfficial Manager:\n-> https://github.com/tiann/KernelSU"
-          elif [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
-            FINAL_RELEASE_NOTES+="\nNext Manager:\n-> https://github.com/KernelSU-Next/KernelSU-Next"
-          elif [ "${{ inputs.kernelsu_variant }}" == "MKSU" ]; then
-            FINAL_RELEASE_NOTES+="\nMKSU Manager:\n-> https://github.com/5ec1cff/KernelSU"
-          elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-            FINAL_RELEASE_NOTES+="\nSukiSU Manager:\n-> https://github.com/ShirkNeko/SukiSU-Ultra"
-          fi
-          
-          FINAL_RELEASE_NOTES+="\n\nLTO: thin"
-          FINAL_RELEASE_NOTES+="\n\n<details>"
-          FINAL_RELEASE_NOTES+="\n<summary>Commit Information</summary>"
-          FINAL_RELEASE_NOTES+="\n\nCommit hashes and links (the following commits refer to the progress of KSU or SUSFS at the time of this compilation):"
-          FINAL_RELEASE_NOTES+="\n- **KernelSU is ${{ inputs.kernelsu_variant }}-${KSU_BRANCH}** (Commit): [${KSU_REF}](${KSU_URL})"
-          FINAL_RELEASE_NOTES+="\n- **SUSFS4KSU** (Commit):"
-          
-          GITLAB_OWNER="simonpunk"
-          GITLAB_REPO="susfs4ksu"
-          
-          declare -A BRANCH_MAP=(
-            ["a12-5.10"]="gki-android12-5.10"
-            ["a13-5.10"]="gki-android13-5.10"
-            ["a13-5.15"]="gki-android13-5.15"
-            ["a14-5.15"]="gki-android14-5.15"
-            ["a14-6.1"]="gki-android14-6.1"
-            ["a15-6.6"]="gki-android15-6.6"
+          ---
+          *Detailed KSU/SUSFS commit hashes have been removed for this release.*
+          EOF
           )
-          
-          declare -a KERNELS_TO_FETCH_SUSFS
-          if [[ "${{ inputs.kernels_to_build }}" == "all" ]]; then
-            for key in "${!BRANCH_MAP[@]}"; do
-              KERNELS_TO_FETCH_SUSFS+=("$key")
-            done
-          else
-            IFS=',' read -r -a INPUT_KERNELS <<< "${{ inputs.kernels_to_build }}"
-            for kernel_input in "${INPUT_KERNELS[@]}"; do
-              case "$kernel_input" in
-                "a12")
-                  KERNELS_TO_FETCH_SUSFS+=("a12-5.10")
-                  ;;
-                "a13")
-                  KERNELS_TO_FETCH_SUSFS+=("a13-5.10" "a13-5.15")
-                  ;;
-                "a14")
-                  KERNELS_TO_FETCH_SUSFS+=("a14-5.15" "a14-6.1")
-                  ;;
-                "a15")
-                  KERNELS_TO_FETCH_SUSFS+=("a15-6.6")
-                  ;;
-                *)
-                  if [[ -n "${BRANCH_MAP[$kernel_input]}" ]]; then
-                    KERNELS_TO_FETCH_SUSFS+=("$kernel_input")
-                  else
-                    echo "Warning: Input kernel '$kernel_input' does not have a defined SUSFS branch mapping. Skipping." >&2
-                  fi
-                  ;;
-              esac
-            done
-          fi
-
-          mapfile -t SORTED_KERNELS < <(printf '%s\n' "${KERNELS_TO_FETCH_SUSFS[@]}" | sort)
-          KERNELS_TO_FETCH_SUSFS=("${SORTED_KERNELS[@]}")
-          
-          for kernel_id in "${KERNELS_TO_FETCH_SUSFS[@]}"; do
-            susfs_branch_name="${BRANCH_MAP[$kernel_id]}"
-            if [[ -n "$susfs_branch_name" ]]; then
-              SUSFS_COMMIT_HASH=$(git ls-remote "https://gitlab.com/$GITLAB_OWNER/$GITLAB_REPO.git" "refs/heads/$susfs_branch_name" | awk '{ print $1 }')
-              SUSFS_COMMIT_HASH="${SUSFS_COMMIT_HASH:-UNKNOWN_COMMIT}"
-              SUSFS_COMMIT_URL="https://gitlab.com/$GITLAB_OWNER/$GITLAB_REPO/-/commit/$SUSFS_COMMIT_HASH"
-              FINAL_RELEASE_NOTES+="\n - ${kernel_id}: [${SUSFS_COMMIT_HASH}](${SUSFS_COMMIT_URL})"
-            else
-              echo "Warning: SUSFS branch name not found for kernel ID: $kernel_id. Cannot fetch commit info." >&2
-            fi
-          done
-          
-          FINAL_RELEASE_NOTES+="\n\n</details>"
           
           echo "FULL_RELEASE_NOTES<<EOF" >> $GITHUB_ENV
           echo -e "$FINAL_RELEASE_NOTES" >> $GITHUB_ENV
@@ -584,6 +456,7 @@ jobs:
           gh release view "${{ env.NEW_TAG }}" --json assets -q '.assets[].name'
 
       - name: send telegram message on push
+        if: always() # 保持 Telegram 通知，但内容仍基于修改后的 RELEASE_NAME/NOTES
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -594,4 +467,4 @@ jobs:
             -d "message_thread_id=$TELEGRAM_MESSAGE_THREAD_ID" \
             -d "text=Latest release: 
             https://github.com/ShirkNeko/GKI_KernelSU_SUSFS/releases/tag/${{ env.NEW_TAG }}
-            ${{ env.RELEASE_NOTES }}"    
+            ${{ env.RELEASE_NOTES }}"
