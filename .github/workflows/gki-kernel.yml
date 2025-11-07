@@ -401,32 +401,25 @@ jobs:
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-      - name: 配置内核名称（彻底去除 AOSP 分支信息）
+      - name: 强制内核版本仅显示 x.x.xx
         run: |
           cd "$CONFIG"
-          if [ -n "${{ inputs.version }}" ]; then
-            CUSTOM_VERSION="${{ inputs.version }}"
-          else
-            CUSTOM_VERSION="zakozakoooooo-1145141919"
-          fi
-          echo "CONFIG_LOCALVERSION=\"-$CUSTOM_VERSION\"" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_LOCALVERSION=\"\"" >> ./common/arch/arm64/configs/gki_defconfig
           cat > ./common/scripts/setlocalversion <<'EOF'
           #!/bin/sh
-          echo "-$CUSTOM_VERSION"
+          echo ""
           EOF
           chmod +x ./common/scripts/setlocalversion
-          export CUSTOM_VERSION="$CUSTOM_VERSION"
+          perl -pi -e 's{UTS_VERSION=\".*\"}{UTS_VERSION=\"#1 SMP PREEMPT $(date -u +\"%a %b %d %H:%M:%S UTC %Y\")\"}' ./common/scripts/mkcompile_h
+          if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
+            sed -i -e "s|\$(preempt-flag-y) \".*\"|\$(preempt-flag-y) \"$(date -u +\"%a %b %d %H:%M:%S UTC %Y\")\"|" ./common/init/Makefile
+          fi
           if [ -f "build/build.sh" ]; then
-            sed -i 's/-dirty//' ./common/scripts/setlocalversion || true
+            sed -i '/-dirty/d' ./common/scripts/setlocalversion
           else
             rm -rf ./common/android/abi_gki_protected_exports_*
-            sed -i '/protected_exports_list/d' ./common/BUILD.bazel || true
-            sed -i '/stable_scmversion_cmd/s/-maybe-dirty//g' ./build/kernel/kleaf/impl/stamp.bzl || true
-          fi
-          CURRENT_TIME=$(date -u +"%a %b %d %H:%M:%S UTC %Y")
-          perl -pi -e "s{UTS_VERSION=\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\| cut -b -\\\$UTS_LEN\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
-          if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
-            sed -i -e "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"$CURRENT_TIME\"|" ./common/init/Makefile
+            sed -i '/protected_exports_list/d' ./common/BUILD.bazel
+            sed -i '/stable_scmversion_cmd/d' ./build/kernel/kleaf/impl/stamp.bzl
           fi
 
       - name: Build with retry
@@ -496,12 +489,10 @@ jobs:
           gzip -n -k -f -9 ./Image > ./Image.gz
 
       - name: 去除 AOSP 分支信息并创建 ZIP
-        env:
-          CUSTOM_VERSION: ${{ inputs.version != '' && inputs.version || 'zakozakoooooo-1145141919' }}
         run: |
           cd ./AnyKernel3
-          BASE_NAME="${{ inputs.kernel_version }}.${{ inputs.sub_level }}-$CUSTOM_VERSION"
-          cp ../Image ./Image 2>/dev/null || cp ../Image.lz4 ./Image || true
+          BASE_NAME="${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
+          cp ../Image ./Image 2>/dev/null || true
           cp ../Image.lz4 ./Image.lz4 2>/dev/null || true
           cp ../Image.gz ./Image.gz 2>/dev/null || gzip -n -k -f -9 ../Image -c > ./Image.gz
           zip -r9 "../${BASE_NAME}-AnyKernel3.zip" ./* -x "*.git*"
@@ -524,7 +515,7 @@ jobs:
           unzip gki-kernel.zip && rm gki-kernel.zip
           $UNPACK_BOOTIMG --boot_img="$(pwd)/boot-5.10.img"
           gzip -n -k -f -9 ./Image > ./Image.gz
-          BASE_NAME="${{ inputs.kernel_version }}.${{ inputs.sub_level }}-$CUSTOM_VERSION"
+          BASE_NAME="${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
           $MKBOOTIMG --header_version 4 --kernel Image --output boot.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
           cp ./boot.img ../${BASE_NAME}-boot.img
@@ -540,7 +531,7 @@ jobs:
         run: |
           cd bootimgs
           gzip -n -k -f -9 ./Image > ./Image.gz
-          BASE_NAME="${{ inputs.kernel_version }}.${{ inputs.sub_level }}-$CUSTOM_VERSION"
+          BASE_NAME="${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
           $MKBOOTIMG --header_version 4 --kernel Image --output boot.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
           cp ./boot.img ../${BASE_NAME}-boot.img
