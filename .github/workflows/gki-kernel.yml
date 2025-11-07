@@ -401,18 +401,19 @@ jobs:
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-      - name: 彻底移除 AOSP 分支信息并仅保留 x.x.xx
+      - name: 彻底移除AOSP分支信息，仅保留 x.x.xx
         run: |
           cd "$CONFIG"
           echo "CONFIG_LOCALVERSION=\"\"" >> ./common/arch/arm64/configs/gki_defconfig
           cat > ./common/scripts/setlocalversion <<'EOF'
-          #!/bin/sh
-          echo ""
-          EOF
+#!/bin/sh
+echo ""
+EOF
           chmod +x ./common/scripts/setlocalversion
-          perl -pi -e 's{UTS_VERSION=\".*\"}{UTS_VERSION=\"#1 SMP PREEMPT $(date -u +\"%a %b %d %H:%M:%S UTC %Y\")\"}' ./common/scripts/mkcompile_h
+          CURRENT_TIME=$(date -u +"%a %b %d %H:%M:%S UTC %Y")
+          perl -pi -e "s{UTS_VERSION=\".*\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
           if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
-            sed -i -e "s|\$(preempt-flag-y) \".*\"|\$(preempt-flag-y) \"$(date -u +\"%a %b %d %H:%M:%S UTC %Y\")\"|" ./common/init/Makefile
+            sed -i -e "s|\$(preempt-flag-y) \".*\"|\$(preempt-flag-y) \"$CURRENT_TIME\"|" ./common/init/Makefile
           fi
           rm -rf ./common/android/abi_gki_protected_exports_*
           sed -i '/protected_exports_list/d' ./common/BUILD.bazel
@@ -487,7 +488,7 @@ jobs:
           cp ./$CONFIG/bazel-bin/common/kernel_aarch64/Image.lz4 ./
           gzip -n -k -f -9 ./Image > ./Image.gz
 
-      - name: 去除 AOSP 分支信息并创建 ZIP
+      - name: 创建 ZIP（仅 x.x.xx）
         run: |
           cd ./AnyKernel3
           BASE_NAME="${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
