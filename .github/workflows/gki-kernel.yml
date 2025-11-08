@@ -407,23 +407,36 @@ jobs:
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-      - name: 配置内核名称
+      - name: 配置内核名称（隐藏 AOSP 分支信息）
         run: |
           cd "$CONFIG"
-          if [ ! -z ${{ inputs.version }} ]; then
-            sed -i '$s|echo "\$res"|echo "${{ inputs.version }}"|' ./common/scripts/setlocalversion
+          
+          # 完全覆盖 setlocalversion，禁止 AOSP 分支泄露
+          cat > ./common/scripts/setlocalversion << 'EOF'
+          #!/bin/bash
+          # 强制自定义版本后缀，隐藏 AOSP 分支
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "${{ inputs.version }}"
           else
-            sed -i '$s|echo "\$res"|echo "\$res-zakozakoooooo-1145141919"|' ./common/scripts/setlocalversion
+            echo "-zakozakoooooo-1145141919"
           fi
+          EOF
+          chmod +x ./common/scripts/setlocalversion
+
+          # 清除 -dirty
+          if [ -f "build/build.sh" ]; then
+            sed -i 's/-dirty//' ./common/scripts/setlocalversion
+          fi
+
+          # 统一编译时间
           CURRENT_TIME=$(date -u +"%a %b %d %H:%M:%S UTC %Y")
           perl -pi -e "s{UTS_VERSION=\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\| cut -b -\\\$UTS_LEN\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
+          
           if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
             sed -i -e "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"$CURRENT_TIME\"|" ./common/init/Makefile
           fi
-          if [ -f "build/build.sh" ]; then
-            sed -i 's/-dirty//' ./common/scripts/setlocalversion
-          else
-            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
+          
+          if [ ! -f "build/build.sh" ]; then
             rm -rf ./common/android/abi_gki_protected_exports_*
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
             if [ ! -z ${{ inputs.version }} ]; then
