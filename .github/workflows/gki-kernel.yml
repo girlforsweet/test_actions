@@ -277,7 +277,7 @@ jobs:
           if [ "$fake_patched" = 1 ]; then
             if [ "$FORMATTED_BRANCH" = "android15-6.6" ]; then
               if grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
-                sed -i -e 's/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' -e 's/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c
+                sed -i -e '/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' -e '/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c
               fi
             fi
             if [ "$FORMATTED_BRANCH" = "android12-5.10" ] || [ "$FORMATTED_BRANCH" = "android13-5.10" ] || [ "$FORMATTED_BRANCH" = "android13-5.15" ]; then
@@ -417,38 +417,35 @@ jobs:
           CONFIG_FILE="common/arch/arm64/configs/gki_defconfig"
           
           echo "--- 1. 强制设置 CONFIG_LOCALVERSION 为空 ---"
-          # 清除并设置 CONFIG_LOCALVERSION 为空，移除所有 -xxx 后缀
+          # 移除任何现有的 CONFIG_LOCALVERSION 行，并设置一个绝对为空的定义，确保无后缀
           sed -i '/^CONFIG_LOCALVERSION=/d' "$CONFIG_FILE"
           echo "CONFIG_LOCALVERSION=\"\"" >> "$CONFIG_FILE"
           
-          echo "--- 2. 清理 scripts/setlocalversion ---"
-          # 强制脚本最后输出空字符串，并移除动态后缀生成逻辑
+          echo "--- 2. 强制清理 scripts/setlocalversion (使其输出空) ---"
+          # 目标是让这个脚本的最终输出结果为空字符串，避免任何后缀生成
           if [ -f "common/scripts/setlocalversion" ]; then
-            sed -i '/UTS_RELEASE=/d' common/scripts/setlocalversion
-            sed -i '/uts_suffix=/d' common/scripts/setlocalversion
-            # 强制脚本最后输出空字符串，完全覆盖所有动态逻辑
+            # 替换最后输出命令，强制输出空字符串
             sed -i '/echo "\$res"/s/echo "\$res"/echo ""/g' common/scripts/setlocalversion
+            # 移除 -dirty
             sed -i 's/-dirty//g' common/scripts/setlocalversion
           fi
 
           echo "--- 3. 强制清理 scripts/mkcompile_h (移除时间戳和主机名) ---"
-          # 移除动态时间戳/主机名，仅保留最基础的版本结构
+          # 移除任何 UTS_VERSION 定义，并写入一个不包含动态信息的常量
           if [ -f "common/scripts/mkcompile_h" ]; then
-            # 移除所有与动态时间戳/主机名相关的定义行
             sed -i '/^UTS_VERSION=/d' common/scripts/mkcompile_h
             # 写入一个固定的、不包含任何动态信息的最小化版本字符串
             echo "UTS_VERSION=\"#1 SMP PREEMPT KERNEL_BUILD_CLEAN\"" >> common/scripts/mkcompile_h 
           fi
 
           echo "--- 4. 移除 Bazel/AOSP 保护导出相关的清理 ---"
-          sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
-          rm -rf ./common/android/abi_gki_protected_exports_*
+          # 移除 AOSP 导出的符号列表相关操作
           sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
-
-          # 确保其他地方没有硬编码版本号
+          rm -rf ./common/android/abi_gki_protected_exports_*
+          
+          echo "--- 5. 最终确认 CONFIG_LOCALVERSION ---"
           sed -i '/^CONFIG_LOCALVERSION=/d' "$CONFIG_FILE"
           echo "CONFIG_LOCALVERSION=\"\"" >> "$CONFIG_FILE"
-
 
       - name: Build with retry
         uses: nick-fields/retry@v3
