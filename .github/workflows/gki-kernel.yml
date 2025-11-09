@@ -407,51 +407,28 @@ jobs:
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-      # 彻底隐藏所有信息，仅保留主版本号
-      - name: 配置内核名称（仅显示 6.6.66）
+      - name: 配置内核名称
         run: |
           cd "$CONFIG"
-
-          # 1. 强制覆盖 setlocalversion：永远输出空字符串
-          cat > ./common/scripts/setlocalversion << 'EOF'
-          #!/bin/bash
-          echo ""
-          EOF
-          chmod +x ./common/scripts/setlocalversion
-
-          # 2. 彻底清除 CONFIG_LOCALVERSION
-          CONFIG_FILE="./common/arch/arm64/configs/gki_defconfig"
-          sed -i '/^CONFIG_LOCALVERSION=/d' "$CONFIG_FILE"
-
-          # 3. 禁用 KMI_STRING 和 KMI_ENFORCED
-          BUILD_CONFIG="./common/build.config.gki.aarch64"
-          if [ -f "$BUILD_CONFIG" ]; then
-            sed -i '/KMI_STRING/d' "$BUILD_CONFIG"
-            sed -i '/KMI_ENFORCED/d' "$BUILD_CONFIG"
-            sed -i '/KMI_GENERATION/d' "$BUILD_CONFIG"
-            echo "KMI_STRING=\"\"" >> "$BUILD_CONFIG"
-            echo "KMI_ENFORCED=false" >> "$BUILD_CONFIG"
+          if [ ! -z ${{ inputs.version }} ]; then
+            sed -i '$s|echo "\$res"|echo "${{ inputs.version }}"|' ./common/scripts/setlocalversion
+          else
+            sed -i '$s|echo "\$res"|echo "\$res-zakozakoooooo-1145141919"|' ./common/scripts/setlocalversion
           fi
-
-          # 4. 清除 -dirty
-          if [ -f "build/build.sh" ]; then
-            sed -i 's/-dirty//' ./common/scripts/setlocalversion 2>/dev/null || true
-          fi
-
-          # 5. 固定编译时间
-          FIXED_TIME="Fri Jan  1 00:00:00 UTC 2025"
-          perl -pi -e "s{UTS_VERSION=\".*\"}{UTS_VERSION=\"#1 SMP PREEMPT $FIXED_TIME\"}" ./common/scripts/mkcompile_h 2>/dev/null || true
-
-          # 6. 6.1 / 6.6 时间固定
+          CURRENT_TIME=$(date -u +"%a %b %d %H:%M:%S UTC %Y")
+          perl -pi -e "s{UTS_VERSION=\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\| cut -b -\\\$UTS_LEN\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
           if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
-            sed -i -e "s|\$(preempt-flag-y) \".*\"|\$(preempt-flag-y) \"$FIXED_TIME\"|" ./common/init/Makefile 2>/dev/null || true
+            sed -i -e "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"$CURRENT_TIME\"|" ./common/init/Makefile
           fi
-
-          # 7. Bazel 构建清理
-          if [ ! -f "build/build.sh" ]; then
-            rm -rf ./common/android/abi_gki_protected_exports_* 2>/dev/null || true
-            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel 2>/dev/null || true
-            sed -i '/stable_scmversion_cmd/s/-maybe-dirty//g' ./build/kernel/kleaf/impl/stamp.bzl 2>/dev/null || true
+          if [ -f "build/build.sh" ]; then
+            sed -i 's/-dirty//' ./common/scripts/setlocalversion
+          else
+            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
+            rm -rf ./common/android/abi_gki_protected_exports_*
+            sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
+            if [ ! -z ${{ inputs.version }} ]; then
+              sed -i '/^CONFIG_LOCALVERSION=/ s/="\([^"]*\)"/="${{ inputs.version }}"/' ./common/arch/arm64/configs/gki_defconfig
+            fi
           fi
 
       - name: Build with retry
