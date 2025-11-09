@@ -410,7 +410,7 @@ jobs:
       - name: 配置内核名称
         run: |
           cd "$CONFIG"
-          if [ ! -z ${{ inputs.version }} ]; then
+          if [ ! -z "${{ inputs.version }}" ]; then
             sed -i '$s|echo "\$res"|echo "${{ inputs.version }}"|' ./common/scripts/setlocalversion
           else
             sed -i '$s|echo "\$res"|echo "\$res"|' ./common/scripts/setlocalversion
@@ -424,7 +424,7 @@ jobs:
             sed -i 's/-dirty//' ./common/scripts/setlocalversion
           else
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
-            if [ ! -z ${{ inputs.version }} ]; then
+            if [ ! -z "${{ inputs.version }}" ]; then
               sed -i '/^CONFIG_LOCALVERSION=/ s/="\([^"]*\)"/="${{ inputs.version }}"/' ./common/arch/arm64/configs/gki_defconfig
             fi
           fi
