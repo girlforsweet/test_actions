@@ -1,3 +1,8 @@
+name: GKI Kernel Build
+permissions:
+  contents: write
+  actions: write
+
 on:
   workflow_call:
     inputs:
@@ -45,10 +50,6 @@ on:
         required: true
         type: boolean
         default: false
-
-permissions:
-  contents: write
-  actions: write
 
 jobs:
   build-kernel-kernelsu-susfs:
@@ -333,11 +334,6 @@ jobs:
             echo "CONFIG_ZRAM_WRITEBACK=y" >> "$CONFIG_FILE"
           fi
 
-      - if: ${{ inputs.set_defbbr }}
-        run: |
-          CONFIG_FILE="$CONFIG/common/arch/arm64/configs/gki_defconfig"
-          echo "CONFIG_DEFAULT_BBR=y" >> "$CONFIG_FILE"
-
       - run: |
           cd "$CONFIG"
           echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
@@ -385,22 +381,28 @@ jobs:
       - run: |
           cd "$CONFIG"
           sed -i '/^CONFIG_LOCALVERSION=/c\CONFIG_LOCALVERSION=""' ./common/arch/arm64/configs/gki_defconfig
-          if [ ! -z "${{ inputs.version }}" ]; then
-            sed -i '$s|echo "\$res"|echo "${{ inputs.version }}"|' ./common/scripts/setlocalversion
+          if [ -n "${{ inputs.version }}" ]; then
+            echo 'echo "${{ inputs.version }}"' > ./common/scripts/setlocalversion
           else
-            sed -i '$s|echo "\$res"|echo "\$res" | sed "s/-android[0-9]\+-[0-9]\+//g"|' ./common/scripts/setlocalversion
+            cat > ./common/scripts/setlocalversion <<'EOF'
+#!/bin/bash
+res=$(git rev-parse --short HEAD 2>/dev/null || echo "")
+[ -n "$res" ] && res="+g$res"
+echo "$res"
+EOF
           fi
-          CURRENT_TIME=$(date -u +"%a %b %d %H:%M:%S UTC %Y")
-          perl -pi -e "s{UTS_VERSION=\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\| cut -b -\\\$UTS_LEN\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
-          if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
-            sed -i -e "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"$CURRENT_TIME\"|" ./common/init/Makefile
+          chmod +x ./common/scripts/setlocalversion
+          if [ ! -f "build/build.sh" ]; then
+            sed -i '/stable_scmversion_cmd/s/.*/# DISABLED AOSP BRANCH INFO/' ./build/kernel/kleaf/impl/stamp.bzl || true
+            sed -i '/stable_scmversion_cmd/d' ./build/kernel/kleaf/impl/stamp.bzl || true
           fi
           if [ -f "build/build.sh" ]; then
-            sed -i 's/-dirty//' ./common/scripts/setlocalversion
-          else
-            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
-            rm -rf ./common/android/abi_gki_protected_exports_*
-            sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
+            sed -i 's/-dirty//' ./common/scripts/setlocalversion || true
+          fi
+          CURRENT_TIME=$(date -u +"%a %b %d %H:%M:%S UTC %Y")
+          perl -pi -e "s{UTS_VERSION=\".*\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
+          if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
+            sed -i -e "s|\$(preempt-flag-y) \".*\"|\$(preempt-flag-y) \"$CURRENT_TIME\"|" ./common/init/Makefile
           fi
 
       - uses: nick-fields/retry@v3
