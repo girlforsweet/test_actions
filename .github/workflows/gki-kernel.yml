@@ -50,6 +50,11 @@ on:
         required: true
         type: boolean
         default: false
+      set_defbbr: # 保留该输入
+        required: false
+        type: boolean
+        default: false
+
 jobs:
   build-kernel-kernelsu-susfs:
     runs-on: ubuntu-latest
@@ -124,8 +129,8 @@ jobs:
         env:
           BOOT_SIGN_KEY: ${{ secrets.BOOT_SIGN_KEY }}
         run: |
-          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 > ./kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem
-          echo "BOOT_SIGN_KEY_PATH=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem" >> $GITHUB_ENV
+            openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 > ./kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem
+            echo "BOOT_SIGN_KEY_PATH=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem" >> $GITHUB_ENV
 
       - name: 安装仓库
         run: |
@@ -143,11 +148,6 @@ jobs:
           git clone https://github.com/Tools-cx-app/kernel_patches.git
           git clone https://github.com/ShirkNeko/SukiSU_patch.git
           
-      - name: 设置 CONFIG 环境变量
-        run: |
-          CONFIG="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}"
-          echo "CONFIG=$CONFIG" >> $GITHUB_ENV
-
       - name: 初始化和同步内核源代码
         run: |
           mkdir -p "$CONFIG"
@@ -180,7 +180,7 @@ jobs:
           fi
           echo "obj-y += hmbird_patch.o" >> Makefile
           tail -n 3 Makefile
-      
+
       - name: 确定 KernelSU 的分支
         run: |
           branch_input="${{ inputs.kernelsu_branch }}"
@@ -193,8 +193,8 @@ jobs:
             "Dev(开发)")
               case "$variant_input" in
                 "Official" | "MKSU") echo "BRANCH=-s main" >> $GITHUB_ENV ;;
-                "Next")              echo "BRANCH=-s next-susfs-dev" >> $GITHUB_ENV ;;
-                "SukiSU")           echo "BRANCH=-s susfs-test" >> $GITHUB_ENV ;;
+                "Next")          echo "BRANCH=-s next-susfs-dev" >> $GITHUB_ENV ;;
+                "SukiSU")         echo "BRANCH=-s susfs-test" >> $GITHUB_ENV ;;
                 *) 
                   echo "错误：未定义开发分支的变体 '$variant_input'" >&2
                   exit 1
@@ -280,7 +280,7 @@ jobs:
           fake_patched=0
           if [ "$FORMATTED_BRANCH" = "android15-6.6" ]; then
             if ! grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
-              sed -i -e '/int ret = 0, copied = 0;/a \\tunsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;' -e '/int ret = 0, copied = 0;/a \\tpagemap_entry_t \*res = NULL;' ./fs/proc/task_mmu.c
+              sed -i -e '/int ret = 0, copied = 0;/a \tunsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;' -e '/int ret = 0, copied = 0;/a \tpagemap_entry_t \*res = NULL;' ./fs/proc/task_mmu.c
               fake_patched=1
             fi
           fi
@@ -304,7 +304,7 @@ jobs:
               fi
             fi
           fi
-  
+      
       - name: 应用新的HOOKS补丁
         run: |
           cd "$CONFIG/common"
@@ -391,7 +391,7 @@ jobs:
         run: |
           CONFIG_FILE="$CONFIG/common/arch/arm64/configs/gki_defconfig"
           echo "CONFIG_DEFAULT_BBR=y" >> "$CONFIG_FILE"
-           
+          
       - name: 添加SUSFS配置设置
         run: |
           cd "$CONFIG"
@@ -404,6 +404,7 @@ jobs:
           elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
             echo "CONFIG_KPM=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_MANUAL_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
           elif [ "${{ inputs.kernelsu_variant }}" == "MKSU" ]; then
             echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> ./common/arch/arm64/configs/gki_defconfig
           fi
@@ -448,36 +449,46 @@ jobs:
           cd "$CONFIG"
           CONFIG_DEF='./common/arch/arm64/configs/gki_defconfig'
           
-          # 1. 强制清空 CONFIG_LOCALVERSION in defconfig
+          echo "--- 1. 强制设置 CONFIG_LOCALVERSION 为空 ---"
+          # 移除任何现有的 CONFIG_LOCALVERSION 行，并设置一个绝对为空的定义，确保无后缀
           sed -i '/^CONFIG_LOCALVERSION=/d' "$CONFIG_DEF"
           echo "CONFIG_LOCALVERSION=\"\"" >> "$CONFIG_DEF"
           
-          # 2. 强制覆盖 common/Makefile 中的版本控制变量，以移除所有 GKI 自带或 SCM 计算的后缀
+          echo "--- 2. 强制清理 scripts/setlocalversion (使其输出空) ---"
+          # 目标是让这个脚本的最终输出结果为空字符串，避免任何后缀生成
+          if [ -f "common/scripts/setlocalversion" ]; then
+            # 替换最后输出命令，强制输出空字符串
+            sed -i '/echo "\$res"/s/echo "\$res"/echo ""/g' common/scripts/setlocalversion
+            # 移除 -dirty
+            sed -i 's/-dirty//g' common/scripts/setlocalversion
+          fi
+
+          echo "--- 3. 强制清理 scripts/mkcompile_h (移除时间戳和主机名) ---"
+          # 移除任何 UTS_VERSION 定义，并写入一个不包含动态信息的常量
+          if [ -f "common/scripts/mkcompile_h" ]; then
+            sed -i '/^UTS_VERSION=/d' common/scripts/mkcompile_h
+            # 写入一个固定的、不包含任何动态信息的最小化版本字符串
+            echo "UTS_VERSION=\"#1\"" >> common/scripts/mkcompile_h 
+          fi
+          
+          echo "--- 4. 强制覆盖 common/Makefile 中的版本控制变量 ---"
           echo "# FORCE CLEAN VERSIONING START" >> ./common/Makefile
           echo "EXTRAVERSION = " >> ./common/Makefile
           echo "LOCALVERSION = " >> ./common/Makefile
           echo "CONFIG_LOCALVERSION = " >> ./common/Makefile
           echo "# FORCE CLEAN VERSIONING END" >> ./common/Makefile
-          
-          # 3. 移除 -dirty 后缀 (Kbuild)
-          # 原始逻辑：移除 scripts/setlocalversion 中的 -dirty
-          if [ -f "build/build.sh" ]; then
-            sed -i 's/-dirty//' ./common/scripts/setlocalversion
-          fi
-          # 补充/替代步骤：清理 setlocalversion 脚本中的动态版本生成逻辑，并强制输出空字符串
-          sed -i '/UTS_RELEASE/d' ./common/scripts/setlocalversion
-          sed -i '/uts_suffix/d' ./common/scripts/setlocalversion
-          sed -i -e '$a\\necho ""' -e '/echo "-dirty"/d' ./common/scripts/setlocalversion
-          
-          # 4. 移除时间戳和主机名 (Kbuild)
-          # 清理 scripts/mkcompile_h，强制使用固定且干净的版本字符串
-          sed -i '/UTS_VERSION/d' ./common/scripts/mkcompile_h
-          echo "echo \#define UTS_VERSION \"#1 SMP PREEMPT KERNEL_BUILD_CLEAN\"" >> ./common/scripts/mkcompile_h
-          
-          # 5. 修复 Bazel 相关文件的版本控制 (移除 -maybe-dirty) (Bazel/Kleaf)
+
+          echo "--- 5. 修复 Bazel 相关文件的版本控制 (移除 -maybe-dirty) (Bazel/Kleaf) ---"
           sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
           rm -rf ./common/android/abi_gki_protected_exports_*
           sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
+
+      - name: 设置精简的最终版本名称 (用于 ZIP/IMG 文件名)
+        run: |
+          # 格式: kernel-x.x.xx
+          FINAL_NAME="kernel-${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
+          echo "FINAL_NAME=$FINAL_NAME" >> $GITHUB_ENV
+          echo "Final asset name set to: $FINAL_NAME"
 
       - name: Build with retry
         uses: nick-fields/retry@v3
@@ -554,17 +565,18 @@ jobs:
         run: |
           cd ./AnyKernel3
 
-          ZIP_NAME="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-AnyKernel3.zip"
+          # 使用精简后的 FINAL_NAME
+          ZIP_NAME="${{ env.FINAL_NAME }}-AnyKernel3.zip"
           mv ../Image ./Image
           zip -r "../$ZIP_NAME" ./*
           rm ./Image
 
-          ZIP_NAME="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-AnyKernel3-lz4.zip"
+          ZIP_NAME="${{ env.FINAL_NAME }}-AnyKernel3-lz4.zip"
           mv ../Image.lz4 ./Image.lz4
           zip -r "../$ZIP_NAME" ./*
           rm ./Image.lz4
 
-          ZIP_NAME="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-AnyKernel3-gz.zip"
+          ZIP_NAME="${{ env.FINAL_NAME }}-AnyKernel3-gz.zip"
           mv ../Image.gz ./Image.gz
           zip -r "../$ZIP_NAME" ./*
           rm ./Image.gz
@@ -593,17 +605,18 @@ jobs:
 
           gzip -n -k -f -9 ./Image > ./Image.gz
 
+          # 使用精简后的 FINAL_NAME
           $MKBOOTIMG --header_version 4 --kernel Image --output boot.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot.img
+          cp ./boot.img ../${{ env.FINAL_NAME }}-boot.img
 
           $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-gz.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-gz.img
+          cp ./boot-gz.img ../${{ env.FINAL_NAME }}-boot-gz.img
 
           $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-lz4.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-lz4.img
+          cp ./boot-lz4.img ../${{ env.FINAL_NAME }}-boot-lz4.img
 
       - name: 运行boot镜像 ${{ inputs.android_version }} 编译脚本
         if: ${{ inputs.android_version == 'android13' || inputs.android_version == 'android14' || inputs.android_version == 'android15' }}
@@ -612,17 +625,18 @@ jobs:
 
           gzip -n -k -f -9 ./Image > ./Image.gz
 
+          # 使用精简后的 FINAL_NAME
           $MKBOOTIMG --header_version 4 --kernel Image --output boot.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot.img
+          cp ./boot.img ../${{ env.FINAL_NAME }}-boot.img
 
           $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-gz.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-gz.img
+          cp ./boot-gz.img ../${{ env.FINAL_NAME }}-boot-gz.img
 
           $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-lz4.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-lz4.img
+          cp ./boot-lz4.img ../${{ env.FINAL_NAME }}-boot-lz4.img
 
       - name: 上传编译资产
         uses: actions/upload-artifact@v4
