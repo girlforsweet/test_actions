@@ -1,4 +1,4 @@
-name: GKI Kernel Build (Minimal)
+name: GKI Kernel Build
 permissions:
   contents: write
   actions: write
@@ -34,29 +34,84 @@ on:
       version:
         required: false
         type: string
-      # 移除未使用的可选功能输入
+      use_zram:
+        required: true
+        type: boolean
+        default: true
+      use_kpm:
+        required: true
+        type: boolean
+        default: true
+      supp_op:
+        required: true
+        type: boolean
+        default: false
+      BBG:
+        required: true
+        type: boolean
+        default: false
+      set_defbbr: # 保留该输入，假设您可能在别处使用
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-kernel-kernelsu-susfs:
     runs-on: ubuntu-latest
-    # 移除 ccache 环境变量
-    
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+
     steps:
-      # 移除 Maximize Build Space
+      - name: Maximize Build Space
+        uses: AdityaGarg8/remove-unwanted-software@v5
+        with:
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'false'
+          verbose: 'true'
 
       - name: 设定 CONFIG 环境变量
         run: |
           CONFIG="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}"
           echo "CONFIG=$CONFIG" >> $GITHUB_ENV
 
-      - name: 安装基本依赖
-        # 移除 ccache 的安装
-        run: sudo apt update && sudo apt upgrade -y && sudo apt install -y python3 git curl
+      - name: 安装 ccache
+        run: sudo apt update && sudo apt upgrade -y && sudo apt install -y ccache python3 git curl
 
-      # 移除 ccache 配置和缓存步骤
+      - name: 配置 ccache
+        run: |
+          mkdir -p ~/.cache/bazel
+          ccache --version
+          ccache --max-size=2G
+          ccache --set-config=compression=true
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
 
-      - name: 下载工具链
-        # 移除缓存检查，保证总是下载
+      - name: 从缓存中还原ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-ccache-
+
+      - name: 缓存工具链
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            kernel-build-tools
+            mkbootimg
+          key: toolchain-${{ runner.os }}-v1
+
+      - name: 下载工具链（如果未找到缓存）
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           AOSP_MIRROR=https://android.googlesource.com
           BRANCH=main-kernel-build-2024
@@ -65,11 +120,16 @@ jobs:
 
       - name: 设置环境变量
         run: |
-          # 移除 AVBTOOL 的设置，因为它不再被使用
+          echo "AVBTOOL=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/bin/avbtool" >> $GITHUB_ENV
           echo "MKBOOTIMG=$GITHUB_WORKSPACE/mkbootimg/mkbootimg.py" >> $GITHUB_ENV
           echo "UNPACK_BOOTIMG=$GITHUB_WORKSPACE/mkbootimg/unpack_bootimg.py" >> $GITHUB_ENV
 
-      # 移除 密钥设置
+      - name: 密钥设置——已经过mkppk修改
+        env:
+          BOOT_SIGN_KEY: ${{ secrets.BOOT_SIGN_KEY }}
+        run: |
+            openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 > ./kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem
+            echo "BOOT_SIGN_KEY_PATH=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem" >> $GITHUB_ENV
 
       - name: 安装仓库
         run: |
@@ -109,7 +169,15 @@ jobs:
             patch -p1 < fix_5.15.legacy.patch
           fi
 
-      # 移除 使GKI在一加8E平台正常使用
+      - name: 使GKI在一加8E平台正常使用
+        if: ${{ inputs.supp_op }}
+        run: |
+          cd "$CONFIG/common/drivers/"
+          curl -LSs "https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/dev/hmbird_patch.c" -o hmbird_patch.c
+          if [ ! -f hmbird_patch.c ]; then
+            echo "hmbird_patch.c 下载失败"
+          fi
+          echo "obj-y += hmbird_patch.o" >> Makefile
 
       - name: 确定 KernelSU 的分支
         run: |
@@ -149,7 +217,14 @@ jobs:
             curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash $BRANCH
           fi
 
-      # 移除 添加 Baseband-guard 支持
+      - name: 添加 Baseband-guard 支持
+        if: ${{ github.event.inputs.BBG == 'true' }}
+        run: |
+          cd "$CONFIG/common"
+          wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
+          CONFIG_FILE="arch/arm64/configs/gki_defconfig"
+          echo "CONFIG_BBG=y" >> "$CONFIG_FILE"
+          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/lockdown/lockdown,baseband_guard/ } }' ./security/Kconfig
 
       - name: 为 KernelSU 变体安装 SUSFS 补丁
         run: |
@@ -223,7 +298,18 @@ jobs:
             patch -p1 -F 3 < scope_min_manual_hooks_v1.6.patch
           fi
 
-      # 移除 ZRAM 相关的补丁和配置
+      - name: 复制源文件 & 应用LZ4KD & ZSTDN补丁
+        if: ${{ inputs.use_zram }}
+        run: |
+          cd "$CONFIG/common"
+          cp -r ../../SukiSU_patch/other/zram/lz4k/include/linux/* ./include/linux/
+          cp -r ../../SukiSU_patch/other/zram/lz4k/lib/* ./lib/
+          cp -r ../../SukiSU_patch/other/zram/lz4k/crypto/* ./crypto/
+          cp -r ../../SukiSU_patch/other/zram/lz4k_oplus ./lib/
+          cp ../../SukiSU_patch/other/zram/zram_patch/${{ inputs.kernel_version }}/lz4kd.patch ./
+          patch -p1 -F 3 < lz4kd.patch || true
+          cp ../../SukiSU_patch/other/zram/zram_patch/${{ inputs.kernel_version }}/lz4k_oplus.patch ./
+          patch -p1 -F 3 < lz4k_oplus.patch || true
 
       - name: 应用隐藏某特征的补丁
         run: |
@@ -236,7 +322,49 @@ jobs:
             patch -p1 -F 3 < 69_hide_stuff.patch
           fi
 
-      # 移除 设置BBR为默认拥塞算法
+      - name: LZ4KD & Lz4k_oplus配置
+        if: ${{ inputs.use_zram }}
+        run: |
+          set -x
+          set -e
+          CONFIG_FILE="$CONFIG/common/arch/arm64/configs/gki_defconfig"
+          if [ "${{ inputs.kernel_version }}" = "5.10" ]; then
+            echo "CONFIG_ZSMALLOC=y" >> "$CONFIG_FILE"
+            echo "CONFIG_ZRAM=y" >> "$CONFIG_FILE"
+            echo "CONFIG_MODULE_SIG=n" >> "$CONFIG_FILE"
+            echo "CONFIG_CRYPTO_LZO=y" >> "$CONFIG_FILE"
+            echo "CONFIG_ZRAM_DEF_COMP_LZ4KD=y" >> "$CONFIG_FILE"
+          fi
+          if [ "${{ inputs.kernel_version }}" != "6.6" ] && [ "${{ inputs.kernel_version }}" != "5.10" ]; then
+            if grep -q "CONFIG_ZSMALLOC" -- "$CONFIG_FILE"; then
+              sed -i 's/CONFIG_ZSMALLOC=m/CONFIG_ZSMALLOC=y/g' "$CONFIG_FILE"
+            else
+              echo "CONFIG_ZSMALLOC=y" >> "$CONFIG_FILE"
+            fi
+            sed -i 's/CONFIG_ZRAM=m/CONFIG_ZRAM=y/g' "$CONFIG_FILE"
+          fi
+          if [ "${{ inputs.kernel_version }}" = "6.6" ]; then
+            echo "CONFIG_ZSMALLOC=y" >> "$CONFIG_FILE"
+            sed -i 's/CONFIG_ZRAM=m/CONFIG_ZRAM=y/g' "$CONFIG_FILE"
+          fi
+          if [ "${{ inputs.android_version }}" = "android14" ] || [ "${{ inputs.android_version }}" = "android15" ]; then
+            sed -i 's/"drivers\/block\/zram\/zram\.ko",//g; s/"mm\/zsmalloc\.ko",//g' "$CONFIG/common/modules.bzl"
+            echo "CONFIG_MODULE_SIG_FORCE=n" >> "$CONFIG_FILE"
+          fi
+          if grep -q "CONFIG_ZSMALLOC=y" "$CONFIG_FILE" && grep -q "CONFIG_ZRAM=y" "$CONFIG_FILE"; then
+            echo "CONFIG_CRYPTO_LZ4HC=y" >> "$CONFIG_FILE"
+            echo "CONFIG_CRYPTO_LZ4K=y" >> "$CONFIG_FILE"
+            echo "CONFIG_CRYPTO_LZ4KD=y" >> "$CONFIG_FILE"
+            echo "CONFIG_CRYPTO_842=y" >> "$CONFIG_FILE"
+            echo "CONFIG_CRYPTO_LZ4K_OPLUS=y" >> "$CONFIG_FILE"
+            echo "CONFIG_ZRAM_WRITEBACK=y" >> "$CONFIG_FILE"
+          fi
+
+      - name: 设置BBR为默认拥塞算法
+        if: ${{ inputs.set_defbbr }}
+        run: |
+          CONFIG_FILE="$CONFIG/common/arch/arm64/configs/gki_defconfig"
+          echo "CONFIG_DEFAULT_BBR=y" >> "$CONFIG_FILE"
 
       - name: 添加SUSFS配置设置
         run: |
@@ -246,7 +374,7 @@ jobs:
             echo "CONFIG_KSU_KPROBES_HOOK=n" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> ./common/arch/arm64/configs/gki_defconfig
           elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-            # 移除 CONFIG_KPM=y 因为 KPM 补丁步骤被移除
+            echo "CONFIG_KPM=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_KSU_MANUAL_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
           elif [ "${{ inputs.kernelsu_variant }}" == "MKSU" ]; then
@@ -283,37 +411,7 @@ jobs:
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-      - name: 配置内核名称
-        run: |
-          cd "$CONFIG"
-          CONFIG_FILE="common/arch/arm64/configs/gki_defconfig"
-          
-          echo "--- 1. 强制设置 CONFIG_LOCALVERSION 为空 ---"
-          sed -i '/^CONFIG_LOCALVERSION=/d' "$CONFIG_FILE"
-          echo "CONFIG_LOCALVERSION=\"\"" >> "$CONFIG_FILE"
-          
-          echo "--- 2. 清理 scripts/setlocalversion ---"
-          if [ -f "common/scripts/setlocalversion" ]; then
-            sed -i '/UTS_RELEASE=/d' common/scripts/setlocalversion
-            sed -i '/uts_suffix=/d' common/scripts/setlocalversion
-            sed -i '/echo "\$res"/s/echo "\$res"/echo ""/g' common/scripts/setlocalversion
-            sed -i 's/-dirty//g' common/scripts/setlocalversion
-          fi
-
-          echo "--- 3. 强制清理 scripts/mkcompile_h (移除时间戳和主机名) ---"
-          if [ -f "common/scripts/mkcompile_h" ]; then
-            sed -i '/^UTS_VERSION=/d' common/scripts/mkcompile_h
-            echo "UTS_VERSION=\"#1 SMP PREEMPT KERNEL_BUILD_CLEAN\"" >> common/scripts/mkcompile_h 
-          fi
-
-          echo "--- 4. 移除 Bazel/AOSP 保护导出相关的清理 ---"
-          sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
-          rm -rf ./common/android/abi_gki_protected_exports_*
-          sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
-
-          sed -i '/^CONFIG_LOCALVERSION=/d' "$CONFIG_FILE"
-          echo "CONFIG_LOCALVERSION=\"\"" >> "$CONFIG_FILE"
-
+      # **已移除 配置内核名称 步骤**
 
       - name: Build with retry
         uses: nick-fields/retry@v3
@@ -329,51 +427,118 @@ jobs:
             sed -i '/MODULES_ORDER=android\/gki_aarch64_modules/d' common/build.config.gki.aarch64
             sed -i '/KMI_SYMBOL_LIST_STRICT_MODE/d' common/build.config.gki.aarch64
             if [ -f "build/build.sh" ]; then
-              # 移除 ccache 的调用
-              LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh || exit 1
+              LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh CC="/usr/bin/ccache clang" || exit 1
             else
               tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast --lto=thin //common:kernel_aarch64_dist || exit 1
             fi
-            # 移除 ccache 统计显示
+            ccache --show-stats
 
-      # 移除所有 Image 文件修补步骤
-
-      # 移除所有 创建Bootimgs文件夹并复制镜像 步骤
-
-      - name: 创建 ZIP 刷机包
+      - name: 修补 Image 文件 安卓12和安卓13(仅限sukisu)
+        if: ${{ inputs.use_kpm && inputs.kernelsu_variant == 'SukiSU' && (inputs.android_version == 'android12' || inputs.android_version == 'android13') }}
         run: |
-          # 1. 确定编译产物路径
-          if [ "${{ inputs.android_version }}" == "android12" ] || [ "${{ inputs.android_version }}" == "android13" ]; then
-            IMAGE_DIR="./$CONFIG/out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist"
-          else
-            IMAGE_DIR="./$CONFIG/bazel-bin/common/kernel_aarch64"
+          if [ "${{ inputs.kernel_version }}" != "6.6" ]; then
+            cd "$CONFIG/out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist"
+            curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o patch
+            chmod 777 patch
+            ./patch
+            rm -rf Image
+            mv oImage Image
+            cd ../../../..
           fi
-          
-          # 2. 切换到 AnyKernel3 目录
+
+      - name: 修补 Image 文件 安卓14和安卓15(仅限sukisu)
+        if: ${{ inputs.use_kpm && inputs.kernelsu_variant == 'SukiSU' && (inputs.android_version == 'android14' || inputs.android_version == 'android15') }}
+        run: |
+          if [ "${{ inputs.kernel_version }}" != "6.6" ]; then
+            cd "$CONFIG/bazel-bin/common/kernel_aarch64/"
+            curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o patch
+            chmod 777 patch
+            ./patch
+            rm -rf Image
+            mv oImage Image
+            cd ../../..
+          fi
+
+      - name: 创建Bootimgs文件夹并复制镜像
+        if: ${{ inputs.android_version == 'android12' || inputs.android_version == 'android13' }}
+        run: |
+          mkdir bootimgs
+          cp ./$CONFIG/out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist/Image ./bootimgs
+          cp ./$CONFIG/out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist/Image.lz4 ./bootimgs
+          cp ./$CONFIG/out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist/Image ./
+          cp ./$CONFIG/out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist/Image.lz4 ./
+          gzip -n -k -f -9 ./Image > ./Image.gz
+
+      - name: 创建Bootimgs文件夹并复制镜像
+        if: ${{ inputs.android_version == 'android14' || inputs.android_version == 'android15' }}
+        run: |
+          mkdir bootimgs
+          cp ./$CONFIG/bazel-bin/common/kernel_aarch64/Image ./bootimgs
+          cp ./$CONFIG/bazel-bin/common/kernel_aarch64/Image.lz4 ./bootimgs
+          cp ./$CONFIG/bazel-bin/common/kernel_aarch64/Image ./
+          cp ./$CONFIG/bazel-bin/common/kernel_aarch64/Image.lz4 ./
+          gzip -n -k -f -9 ./Image > ./Image.gz
+
+      - name: 去除 AOSP 分支信息并创建 ZIP
+        run: |
           cd ./AnyKernel3
           BASE_NAME="${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}"
-          
-          # 3. 创建 Image ZIP
-          cp "$IMAGE_DIR/Image" ./Image
+          mv ../Image ./Image
           zip -r "../${BASE_NAME}-AnyKernel3.zip" ./*
           rm ./Image
-          
-          # 4. 创建 Image.lz4 ZIP
-          cp "$IMAGE_DIR/Image.lz4" ./Image.lz4
+          mv ../Image.lz4 ./Image.lz4
           zip -r "../${BASE_NAME}-AnyKernel3-lz4.zip" ./*
           rm ./Image.lz4
-          
-          # 5. 创建 Image.gz ZIP (需要手动压缩)
-          gzip -n -k -f -9 "$IMAGE_DIR/Image" > ./Image.gz
+          mv ../Image.gz ./Image.gz
           zip -r "../${BASE_NAME}-AnyKernel3-gz.zip" ./*
           rm ./Image.gz
 
-      # 移除所有 运行boot镜像 编译脚本 步骤
+      - name: 运行boot镜像 ${{ inputs.android_version }} 编译脚本
+        if: ${{ inputs.android_version == 'android12' }}
+        run: |
+          cd bootimgs
+          GKI_URL=https://dl.google.com/android/gki/gki-certified-boot-android12-5.10-"${{ inputs.os_patch_level }}"_"${{ inputs.revision }}"\.zip
+          FALLBACK_URL=https://dl.google.com/android/gki/gki-certified-boot-android12-5.10-2023-01_r1.zip
+          status=$(curl -sL -w "%{http_code}" "$GKI_URL" -o /dev/null)
+          if [ "$status" = "200" ]; then
+              curl -Lo gki-kernel.zip "$GKI_URL"
+          else
+              curl -Lo gki-kernel.zip "$FALLBACK_URL"
+          fi
+          unzip gki-kernel.zip && rm gki-kernel.zip
+          $UNPACK_BOOTIMG --boot_img="$(pwd)/boot-5.10.img"
+          gzip -n -k -f -9 ./Image > ./Image.gz
+          BASE_NAME="${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}"
+          $MKBOOTIMG --header_version 4 --kernel Image --output boot.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
+          $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
+          cp ./boot.img ../${BASE_NAME}-boot.img
+          $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
+          $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
+          cp ./boot-gz.img ../${BASE_NAME}-boot-gz.img
+          $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
+          $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
+          cp ./boot-lz4.img ../${BASE_NAME}-boot-lz4.img
+
+      - name: 运行boot镜像 ${{ inputs.android_version }} 编译脚本
+        if: ${{ inputs.android_version == 'android13' || inputs.android_version == 'android14' || inputs.android_version == 'android15' }}
+        run: |
+          cd bootimgs
+          gzip -n -k -f -9 ./Image > ./Image.gz
+          BASE_NAME="${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}"
+          $MKBOOTIMG --header_version 4 --kernel Image --output boot.img
+          $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
+          cp ./boot.img ../${BASE_NAME}-boot.img
+          $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img
+          $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
+          cp ./boot-gz.img ../${BASE_NAME}-boot-gz.img
+          $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img
+          $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
+          cp ./boot-lz4.img ../${BASE_NAME}-boot-lz4.img
 
       - name: 上传编译资产
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.kernelsu_variant }}_kernel-${{ env.CONFIG }}
-          # 只上传 ZIP 文件
           path: |
             *.zip
+            *.img
