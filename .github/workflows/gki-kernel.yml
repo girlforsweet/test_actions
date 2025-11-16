@@ -50,7 +50,7 @@ on:
         required: true
         type: boolean
         default: false
-      set_defbbr: # 保留该输入
+      set_defbbr:
         required: false
         type: boolean
         default: false
@@ -222,7 +222,7 @@ jobs:
           fi
 
       - name: 添加 Baseband-guard 支持
-        if: ${{ github.event.inputs.BBG == 'true' }}
+        if: ${{ inputs.BBG }}
         run: |
           cd "$CONFIG/common"
           
@@ -450,24 +450,18 @@ jobs:
           CONFIG_DEF='./common/arch/arm64/configs/gki_defconfig'
           
           echo "--- 1. 强制设置 CONFIG_LOCALVERSION 为空 ---"
-          # 移除任何现有的 CONFIG_LOCALVERSION 行，并设置一个绝对为空的定义，确保无后缀
           sed -i '/^CONFIG_LOCALVERSION=/d' "$CONFIG_DEF"
           echo "CONFIG_LOCALVERSION=\"\"" >> "$CONFIG_DEF"
           
           echo "--- 2. 强制清理 scripts/setlocalversion (使其输出空) ---"
-          # 目标是让这个脚本的最终输出结果为空字符串，避免任何后缀生成
           if [ -f "common/scripts/setlocalversion" ]; then
-            # 替换最后输出命令，强制输出空字符串
             sed -i '/echo "\$res"/s/echo "\$res"/echo ""/g' common/scripts/setlocalversion
-            # 移除 -dirty
             sed -i 's/-dirty//g' common/scripts/setlocalversion
           fi
 
           echo "--- 3. 强制清理 scripts/mkcompile_h (移除时间戳和主机名) ---"
-          # 移除任何 UTS_VERSION 定义，并写入一个不包含动态信息的常量
           if [ -f "common/scripts/mkcompile_h" ]; then
             sed -i '/^UTS_VERSION=/d' common/scripts/mkcompile_h
-            # 写入一个固定的、不包含任何动态信息的最小化版本字符串
             echo "UTS_VERSION=\"#1\"" >> common/scripts/mkcompile_h 
           fi
           
@@ -485,7 +479,6 @@ jobs:
 
       - name: 设置精简的最终版本名称 (用于 ZIP/IMG 文件名)
         run: |
-          # 格式: kernel-x.x.xx
           FINAL_NAME="kernel-${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
           echo "FINAL_NAME=$FINAL_NAME" >> $GITHUB_ENV
           echo "Final asset name set to: $FINAL_NAME"
@@ -505,7 +498,7 @@ jobs:
             sed -i '/KMI_SYMBOL_LIST_STRICT_MODE/d' common/build.config.gki.aarch64
 
             if [ -f "build/build.sh" ]; then
-              LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh CC="/usr/bin/ccache clang" || exit 1
+              LTO=thin BUILD_CONFIG=common/build.config.gki.aarch66 build/build.sh CC="/usr/bin/ccache clang" || exit 1
             else
               tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast --lto=thin //common:kernel_aarch64_dist || exit 1
             fi
@@ -565,7 +558,6 @@ jobs:
         run: |
           cd ./AnyKernel3
 
-          # 使用精简后的 FINAL_NAME
           ZIP_NAME="${{ env.FINAL_NAME }}-AnyKernel3.zip"
           mv ../Image ./Image
           zip -r "../$ZIP_NAME" ./*
@@ -605,7 +597,6 @@ jobs:
 
           gzip -n -k -f -9 ./Image > ./Image.gz
 
-          # 使用精简后的 FINAL_NAME
           $MKBOOTIMG --header_version 4 --kernel Image --output boot.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
           cp ./boot.img ../${{ env.FINAL_NAME }}-boot.img
@@ -625,7 +616,6 @@ jobs:
 
           gzip -n -k -f -9 ./Image > ./Image.gz
 
-          # 使用精简后的 FINAL_NAME
           $MKBOOTIMG --header_version 4 --kernel Image --output boot.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
           cp ./boot.img ../${{ env.FINAL_NAME }}-boot.img
