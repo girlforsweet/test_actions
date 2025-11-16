@@ -50,7 +50,7 @@ on:
         required: true
         type: boolean
         default: false
-      set_defbbr: # 保留该输入，假设您可能在别处使用
+      set_defbbr:
         required: false
         type: boolean
         default: false
@@ -163,7 +163,7 @@ jobs:
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
           FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}"
           if grep -q deprecated <<< "$REMOTE_BRANCH" && \
-             { [ "$FORMATTED_BRANCH" == "android13-5.15" ] && [ ${{ inputs.sub_level }} -lt 123 ]; }; then
+              { [ "$FORMATTED_BRANCH" == "android13-5.15" ] && [ ${{ inputs.sub_level }} -lt 123 ]; }; then
             cd ./common
             curl -LSs https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/legacy/fix_5.15.legacy -o fix_5.15.legacy.patch
             patch -p1 < fix_5.15.legacy.patch
@@ -190,9 +190,9 @@ jobs:
             "Dev(开发)")
               case "$variant_input" in
                 "Official" | "MKSU") echo "BRANCH=-s main" >> $GITHUB_ENV ;;
-                "Next")          echo "BRANCH=-s next-susfs-dev" >> $GITHUB_ENV ;;
-                "SukiSU")         echo "BRANCH=-s susfs-test" >> $GITHUB_ENV ;;
-                *) 
+                "Next")           echo "BRANCH=-s next-susfs-dev" >> $GITHUB_ENV ;;
+                "SukiSU")           echo "BRANCH=-s susfs-test" >> $GITHUB_ENV ;;
+                *)  
                   echo "错误：未定义开发分支的变体 '$variant_input'" >&2
                   exit 1
                   ;;
@@ -250,7 +250,7 @@ jobs:
           cd ../common
           FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}"
           if grep -q deprecated <<< "$REMOTE_BRANCH" && \
-             { [ "$FORMATTED_BRANCH" == "android12-5.10" ] && [ ${{ inputs.sub_level }} -lt 136 ]; }; then
+              { [ "$FORMATTED_BRANCH" == "android12-5.10" ] && [ ${{ inputs.sub_level }} -lt 136 ]; }; then
             patch -p1 < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
             curl -LSs https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/legacy/fdinfo.c.patch -o fdinfo.c.patch
             patch -p1 < fdinfo.c.patch
@@ -416,36 +416,25 @@ jobs:
           cd "$CONFIG"
           CONFIG_FILE="common/arch/arm64/configs/gki_defconfig"
           
-          echo "--- 1. 强制设置 CONFIG_LOCALVERSION 为空 ---"
-          # 清除并设置 CONFIG_LOCALVERSION 为空，移除所有 -xxx 后缀
           sed -i '/^CONFIG_LOCALVERSION=/d' "$CONFIG_FILE"
           echo "CONFIG_LOCALVERSION=\"\"" >> "$CONFIG_FILE"
           
-          echo "--- 2. 清理 scripts/setlocalversion ---"
-          # 强制脚本最后输出空字符串，并移除动态后缀生成逻辑
           if [ -f "common/scripts/setlocalversion" ]; then
             sed -i '/UTS_RELEASE=/d' common/scripts/setlocalversion
             sed -i '/uts_suffix=/d' common/scripts/setlocalversion
-            # 强制脚本最后输出空字符串，完全覆盖所有动态逻辑
             sed -i '/echo "\$res"/s/echo "\$res"/echo ""/g' common/scripts/setlocalversion
             sed -i 's/-dirty//g' common/scripts/setlocalversion
           fi
 
-          echo "--- 3. 强制清理 scripts/mkcompile_h (移除时间戳和主机名) ---"
-          # 移除动态时间戳/主机名，仅保留最基础的版本结构
           if [ -f "common/scripts/mkcompile_h" ]; then
-            # 移除所有与动态时间戳/主机名相关的定义行
             sed -i '/^UTS_VERSION=/d' common/scripts/mkcompile_h
-            # 写入一个固定的、不包含任何动态信息的最小化版本字符串
-            echo "UTS_VERSION=\"#1 SMP PREEMPT KERNEL_BUILD_CLEAN\"" >> common/scripts/mkcompile_h 
+            echo "UTS_VERSION=\"#1\"" >> common/scripts/mkcompile_h
           fi
 
-          echo "--- 4. 移除 Bazel/AOSP 保护导出相关的清理 ---"
           sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
           rm -rf ./common/android/abi_gki_protected_exports_*
           sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
 
-          # 确保其他地方没有硬编码版本号
           sed -i '/^CONFIG_LOCALVERSION=/d' "$CONFIG_FILE"
           echo "CONFIG_LOCALVERSION=\"\"" >> "$CONFIG_FILE"
 
