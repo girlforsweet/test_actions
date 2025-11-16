@@ -443,6 +443,32 @@ jobs:
           
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
+      - name: 配置内核名称 (强制移除所有分支和后缀)
+        run: |
+          cd "$CONFIG"
+          CONFIG_DEF='./common/arch/arm64/configs/gki_defconfig'
+          
+          # 1. 强制清空 CONFIG_LOCALVERSION in defconfig
+          sed -i '/^CONFIG_LOCALVERSION=/d' "$CONFIG_DEF"
+          echo "CONFIG_LOCALVERSION=\"\"" >> "$CONFIG_DEF"
+          
+          # 2. 强制覆盖 common/Makefile 中的版本控制变量，以移除所有 GKI 自带或 SCM 计算的后缀
+          echo "# FORCE CLEAN VERSIONING START" >> ./common/Makefile
+          echo "EXTRAVERSION = " >> ./common/Makefile
+          echo "LOCALVERSION = " >> ./common/Makefile
+          echo "CONFIG_LOCALVERSION = " >> ./common/Makefile
+          echo "# FORCE CLEAN VERSIONING END" >> ./common/Makefile
+          
+          # 3. 移除 -dirty 后缀 (Kbuild)
+          if [ -f "build/build.sh" ]; then
+            sed -i 's/-dirty//' ./common/scripts/setlocalversion
+          fi
+          
+          # 4. 修复 Bazel 相关文件的版本控制 (移除 -maybe-dirty) (Bazel/Kleaf)
+          sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
+          rm -rf ./common/android/abi_gki_protected_exports_*
+          sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
+
       - name: Build with retry
         uses: nick-fields/retry@v3
         with:
