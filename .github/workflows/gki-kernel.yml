@@ -460,11 +460,21 @@ jobs:
           echo "# FORCE CLEAN VERSIONING END" >> ./common/Makefile
           
           # 3. 移除 -dirty 后缀 (Kbuild)
+          # 原始逻辑：移除 scripts/setlocalversion 中的 -dirty
           if [ -f "build/build.sh" ]; then
             sed -i 's/-dirty//' ./common/scripts/setlocalversion
           fi
+          # 补充/替代步骤：清理 setlocalversion 脚本中的动态版本生成逻辑，并强制输出空字符串
+          sed -i '/UTS_RELEASE/d' ./common/scripts/setlocalversion
+          sed -i '/uts_suffix/d' ./common/scripts/setlocalversion
+          sed -i -e '$a\\necho ""' -e '/echo "-dirty"/d' ./common/scripts/setlocalversion
           
-          # 4. 修复 Bazel 相关文件的版本控制 (移除 -maybe-dirty) (Bazel/Kleaf)
+          # 4. 移除时间戳和主机名 (Kbuild)
+          # 清理 scripts/mkcompile_h，强制使用固定且干净的版本字符串
+          sed -i '/UTS_VERSION/d' ./common/scripts/mkcompile_h
+          echo "echo \#define UTS_VERSION \"#1 SMP PREEMPT KERNEL_BUILD_CLEAN\"" >> ./common/scripts/mkcompile_h
+          
+          # 5. 修复 Bazel 相关文件的版本控制 (移除 -maybe-dirty) (Bazel/Kleaf)
           sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
           rm -rf ./common/android/abi_gki_protected_exports_*
           sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
