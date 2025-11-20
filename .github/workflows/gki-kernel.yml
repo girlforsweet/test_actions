@@ -1,4 +1,4 @@
-name: GKI Kernel Build
+Name: GKI Kernel Build
 permissions:
   contents: write
   actions: write
@@ -19,6 +19,10 @@ on:
       sub_level:
         required: true
         type: string
+      custom_version:
+        required: false
+        type: string
+        default: ""
       os_patch_level:
         required: true
         type: string
@@ -443,6 +447,55 @@ jobs:
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
           
           sed -i 's/check_defconfig//' ./common/build.config.gki
+          
+      - name: 🚀 覆盖自定义内核版本号 (支持完整 X.Y.Z-suffix 修改)
+        if: inputs.custom_version != ''
+        run: |
+          cd "$CONFIG/common"
+          CUSTOM_VERSION_INPUT="${{ inputs.custom_version }}"
+          
+          VERSION_PARTS=$(echo "$CUSTOM_VERSION_INPUT" | cut -d'-' -f1)
+          
+          MAIN_VERSION=$(echo "$VERSION_PARTS" | cut -d'.' -f1)
+          PATCH_LEVEL=$(echo "$VERSION_PARTS" | cut -d'.' -f2)
+          SUB_LEVEL=$(echo "$VERSION_PARTS" | cut -d'.' -f3)
+
+          if [[ "$CUSTOM_VERSION_INPUT" == *-* ]]; then
+              EXTRAVERSION_PART="-$(echo "$CUSTOM_VERSION_INPUT" | cut -d'-' -f2-)"
+          else
+              EXTRAVERSION_PART=""
+          fi
+
+          if [ -z "$MAIN_VERSION" ] || [ -z "$PATCH_LEVEL" ] || [ -z "$SUB_LEVEL" ]; then
+              echo "WARNING: Failed to parse full custom version ($CUSTOM_VERSION_INPUT), falling back to partial GKI inputs."
+              MAIN_VERSION=$(echo "${{ inputs.kernel_version }}" | cut -d'.' -f1)
+              PATCH_LEVEL=$(echo "${{ inputs.kernel_version }}" | cut -d'.' -f2)
+              SUB_LEVEL="${{ inputs.sub_level }}"
+          fi
+
+          sed -i '/^VERSION =/d' ./Makefile
+          sed -i '/^PATCHLEVEL =/d' ./Makefile
+          sed -i '/^SUBLEVEL =/d' ./Makefile
+          sed -i '/^EXTRAVERSION =/d' ./Makefile
+          sed -i '/^LOCALVERSION =/d' ./Makefile
+          
+          echo "VERSION = $MAIN_VERSION" >> ./Makefile
+          echo "PATCHLEVEL = $PATCH_LEVEL" >> ./Makefile
+          echo "SUBLEVEL = $SUB_LEVEL" >> ./Makefile
+          echo "EXTRAVERSION = $EXTRAVERSION_PART" >> ./Makefile
+          echo "LOCALVERSION = $EXTRAVERSION_PART" >> ./Makefile
+          
+          CONFIG_DEF='arch/arm64/configs/gki_defconfig'
+          sed -i '/^CONFIG_LOCALVERSION=/d' "$CONFIG_DEF"
+          echo "CONFIG_LOCALVERSION=\"$EXTRAVERSION_PART\"" >> "$CONFIG_DEF"
+          
+          echo "Kernel version modified to: $MAIN_VERSION.$PATCH_LEVEL.$SUB_LEVEL$EXTRAVERSION_PART"
+          
+          NEW_FINAL_NAME="kernel-$MAIN_VERSION.$PATCH_LEVEL.$SUB_LEVEL$EXTRAVERSION_PART"
+          echo "FINAL_NAME=$NEW_FINAL_NAME" >> $GITHUB_ENV
+          echo "Final asset name updated to: $NEW_FINAL_NAME"
+          
+          cd ../..
 
       - name: 配置内核名称 (强制移除所有分支和后缀)
         run: |
@@ -451,7 +504,9 @@ jobs:
           
           echo "--- 1. 强制设置 CONFIG_LOCALVERSION 为空 ---"
           sed -i '/^CONFIG_LOCALVERSION=/d' "$CONFIG_DEF"
-          echo "CONFIG_LOCALVERSION=\"\"" >> "$CONFIG_DEF"
+          if [[ -z ${{ inputs.custom_version }} ]]; then
+            echo "CONFIG_LOCALVERSION=\"\"" >> "$CONFIG_DEF"
+          fi
           
           echo "--- 2. 强制清理 scripts/setlocalversion (使其输出空) ---"
           if [ -f "common/scripts/setlocalversion" ]; then
@@ -466,9 +521,12 @@ jobs:
           fi
           
           echo "--- 4. 强制覆盖 common/Makefile 中的版本控制变量 ---"
+          sed -i '/# FORCE CLEAN VERSIONING START/,/# FORCE CLEAN VERSIONING END/d' ./common/Makefile
           echo "# FORCE CLEAN VERSIONING START" >> ./common/Makefile
-          echo "EXTRAVERSION = " >> ./common/Makefile
-          echo "LOCALVERSION = " >> ./common/Makefile
+          if [[ -z ${{ inputs.custom_version }} ]]; then
+            echo "EXTRAVERSION = " >> ./common/Makefile
+            echo "LOCALVERSION = " >> ./common/Makefile
+          fi
           echo "CONFIG_LOCALVERSION = " >> ./common/Makefile
           echo "# FORCE CLEAN VERSIONING END" >> ./common/Makefile
 
@@ -478,6 +536,7 @@ jobs:
           sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
 
       - name: 设置精简的最终版本名称 (用于 ZIP/IMG 文件名)
+        if: inputs.custom_version == ''
         run: |
           FINAL_NAME="kernel-${{ inputs.kernel_version }}.${{ inputs.sub_level }}"
           echo "FINAL_NAME=$FINAL_NAME" >> $GITHUB_ENV
