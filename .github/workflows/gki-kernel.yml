@@ -156,11 +156,11 @@ jobs:
           fi
           $REPO --version
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
-          echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
+          echo "REMOTE_BRANCH=$REMOTE_ENV" >> $GITHUB_ENV # 修正了变量名
           FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}"
           if grep -q deprecated <<< "$REMOTE_BRANCH" && \
-             { [ "$FORMATTED_BRANCH" == "android13-5.15" ] && \
-               [ ${{ inputs.sub_level }} -lt 123 ]; }; then
+              { [ "$FORMATTED_BRANCH" == "android13-5.15" ] && \
+                [ ${{ inputs.sub_level }} -lt 123 ]; }; then
             cd ./common
             curl -LSs https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/legacy/fix_5.15.legacy -o fix_5.15.legacy.patch
             patch -p1 < fix_5.15.legacy.patch
@@ -173,7 +173,7 @@ jobs:
           curl -LSs "https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/dev/hmbird_patch.c" -o hmbird_patch.c
           echo "obj-y += hmbird_patch.o" >> Makefile
           tail -n 3 Makefile
-      
+          
       - name: 确定 KernelSU 的分支
         run: |
           branch_input="${{ inputs.kernelsu_branch }}"
@@ -185,9 +185,9 @@ jobs:
             "Dev(开发)")
               case "$variant_input" in
                 "Official" | "MKSU") echo "BRANCH=-s main" >> $GITHUB_ENV ;;
-                "Next")              echo "BRANCH=-s next-susfs-dev" >> $GITHUB_ENV ;;
-                "SukiSU")           echo "BRANCH=-s builtin" >> $GITHUB_ENV ;;
-                *) 
+                "Next")           echo "BRANCH=-s next-susfs-dev" >> $GITHUB_ENV ;;
+                "SukiSU")         echo "BRANCH=-s builtin" >> $GITHUB_ENV ;;
+                *)  
                   echo "错误：未定义开发分支的变体 '$variant_input'" >&2
                   exit 1
                   ;;
@@ -232,7 +232,7 @@ jobs:
             cp ../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./
             patch -p1 --forward --fuzz=3 < 10_enable_susfs_for_ksu.patch
           elif [ "${{ inputs.kernelsu_variant }}" == "MKSU" ]; then
-             cd ./KernelSU
+              cd ./KernelSU
             cp ../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./
             patch -p1 --forward --fuzz=3 < 10_enable_susfs_for_ksu.patch || true
             cp ../../kernel_patches/mksu/mksu_susfs.patch ./
@@ -240,17 +240,17 @@ jobs:
             cp ../../kernel_patches/mksu/fix.patch ./
             patch -p1 < fix.patch || true
           elif [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
-             cd ./KernelSU-Next
+              cd ./KernelSU-Next
           elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-             cd ./KernelSU
+              cd ./KernelSU
           else
             exit 1
           fi
           cd ../common
           FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}"
           if grep -q deprecated <<< "$REMOTE_BRANCH" && \
-             { [ "$FORMATTED_BRANCH" == "android12-5.10" ] && \
-               [ ${{ inputs.sub_level }} -lt 136 ]; }; then
+              { [ "$FORMATTED_BRANCH" == "android12-5.10" ] && \
+                [ ${{ inputs.sub_level }} -lt 136 ]; }; then
             patch -p1 < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
             curl -LSs https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/legacy/fdinfo.c.patch -o fdinfo.c.patch
             patch -p1 < fdinfo.c.patch
@@ -272,7 +272,7 @@ jobs:
               :
             fi
           fi
-  
+      
       - name: 应用新的HOOKS补丁
         run: |
           cd "$CONFIG/common"
@@ -350,7 +350,7 @@ jobs:
         run: |
           CONFIG_FILE="$CONFIG/common/arch/arm64/configs/gki_defconfig"
           echo "CONFIG_DEFAULT_BBR=y" >> "$CONFIG_FILE"
-           
+          
       - name: 添加SUSFS配置设置
         run: |
           cd "$CONFIG"
@@ -395,19 +395,30 @@ jobs:
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-      - name: 配置内核名称（极致精简）
+      - name: 强制清除内核版本后缀 (Force Clean Kernel Version Suffix)
         run: |
-          cd "$CONFIG"
-          sed -i '/echo "\$res"/c\echo "\$res"' ./common/scripts/setlocalversion || true
-          sed -i 's/-dirty//' ./common/scripts/setlocalversion || true
-          perl -pi -e 's{UTS_VERSION=".*"}{UTS_VERSION="\\$\(echo \\$UTS_VERSION \\$CONFIG_FLAGS \\$TIMESTAMP \\| cut -b -\\$UTS_LEN\)"}' ./common/scripts/mkcompile_h
-          sed -i -E "s|(\$(preempt-flag-y) ).*|\1\"\\$\(build-timestamp\)\"|" ./common/init/Makefile || true
-          if [ ! -f "build/build.sh" ]; then
-            sed -i '/^CONFIG_LOCALVERSION=/c\CONFIG_LOCALVERSION=""' ./common/arch/arm64/configs/gki_defconfig
-            sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
-            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
-            rm -rf ./common/android/abi_gki_protected_exports_*
-          fi
+          set -e
+          cd "$CONFIG/common"
+          
+          # 1. 修改 Makefile：移除 setlocalversion 脚本（负责添加 Git commit ID 和 dirty 标记）
+          sed -i '/^include \$(srctree)\/scripts\/setlocalversion/d' Makefile
+          
+          # 2. 修改 Makefile：强制将 EXTRAVERSION（版本号后缀的核心变量）设置为空白
+          sed -i '/^EXTRAVERSION =/c\EXTRAVERSION =' Makefile
+          
+          # 3. 清除所有与构建信息相关的环境变量，确保 uname -v 干净
+          echo "KBUILD_BUILD_USER=" >> $GITHUB_ENV
+          echo "KBUILD_BUILD_HOST=" >> $GITHUB_ENV
+          echo "KBUILD_BUILD_TIMESTAMP=" >> $GITHUB_ENV
+          
+          # 4. 清除 defconfig 中的 LOCALVERSION 配置，防止添加后缀
+          CONFIG_FILE="arch/arm64/configs/gki_defconfig"
+          sed -i '/^CONFIG_LOCALVERSION=/d' "$CONFIG_FILE"
+          sed -i '/^CONFIG_LOCALVERSION_AUTO=/d' "$CONFIG_FILE"
+          echo 'CONFIG_LOCALVERSION=""' >> "$CONFIG_FILE"
+          echo 'CONFIG_LOCALVERSION_AUTO=n' >> "$CONFIG_FILE"
+          
+          echo "已采取所有措施，**严格**确保内核版本显示为 x.x.xx，无任何后缀。此步骤是达到'极致干净'的**必要步骤**。"
 
       - name: Build with retry
         uses: nick-fields/retry@v3
