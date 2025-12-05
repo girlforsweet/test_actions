@@ -156,7 +156,7 @@ jobs:
           fi
           $REPO --version
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
-          echo "REMOTE_BRANCH=$REMOTE_ENV" >> $GITHUB_ENV # 修正了变量名
+          echo "REMOTE_BRANCH=$REMOTE_ENV" >> $GITHUB_ENV
           FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}"
           if grep -q deprecated <<< "$REMOTE_BRANCH" && \
               { [ "$FORMATTED_BRANCH" == "android13-5.15" ] && \
@@ -395,30 +395,20 @@ jobs:
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-      - name: 强制清除内核版本后缀 (Force Clean Kernel Version Suffix)
+      - name: 强制清除内核版本后缀
         run: |
           set -e
           cd "$CONFIG/common"
-          
-          # 1. 修改 Makefile：移除 setlocalversion 脚本（负责添加 Git commit ID 和 dirty 标记）
           sed -i '/^include \$(srctree)\/scripts\/setlocalversion/d' Makefile
-          
-          # 2. 修改 Makefile：强制将 EXTRAVERSION（版本号后缀的核心变量）设置为空白
           sed -i '/^EXTRAVERSION =/c\EXTRAVERSION =' Makefile
-          
-          # 3. 清除所有与构建信息相关的环境变量，确保 uname -v 干净
           echo "KBUILD_BUILD_USER=" >> $GITHUB_ENV
           echo "KBUILD_BUILD_HOST=" >> $GITHUB_ENV
           echo "KBUILD_BUILD_TIMESTAMP=" >> $GITHUB_ENV
-          
-          # 4. 清除 defconfig 中的 LOCALVERSION 配置，防止添加后缀
           CONFIG_FILE="arch/arm64/configs/gki_defconfig"
           sed -i '/^CONFIG_LOCALVERSION=/d' "$CONFIG_FILE"
           sed -i '/^CONFIG_LOCALVERSION_AUTO=/d' "$CONFIG_FILE"
           echo 'CONFIG_LOCALVERSION=""' >> "$CONFIG_FILE"
           echo 'CONFIG_LOCALVERSION_AUTO=n' >> "$CONFIG_FILE"
-          
-          echo "已采取所有措施，**严格**确保内核版本显示为 x.x.xx，无任何后缀。此步骤是达到'极致干净'的**必要步骤**。"
 
       - name: Build with retry
         uses: nick-fields/retry@v3
