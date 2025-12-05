@@ -440,28 +440,32 @@ jobs:
         run: |
           echo "更改为配置目录: $CONFIG..."
           cd "$CONFIG"
-          # 强制清理 -dirty 和 Bazel 的 SCM 版本后缀
+          # 步骤 1: 强制清理所有版本后缀
           if [ -f "build/build.sh" ]; then
+            # 针对 build.sh 移除 -dirty
             sed -i 's/-dirty//' ./common/scripts/setlocalversion
           else
+            # 针对 Bazel 移除 -maybe-dirty
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
+            # Bazel 清理（非版本，但保持干净）
             sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
             rm -rf ./common/android/abi_gki_protected_exports_*
           fi
-          # 如果提供了版本输入，则覆盖版本号，实现干净版本显示
+          # 步骤 2: 极致清理 UTS_VERSION ( uname -v 的内容，如 #1 SMP PREEMPT )
+          # 替换 mkcompile_h 中的时间戳和编译信息，使 uname -v 显示为空或极简信息
+          perl -pi -e "s{UTS_VERSION=\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\| cut -b -\\\$UTS_LEN\)\"}{UTS_VERSION=\"\"}" ./common/scripts/mkcompile_h
+          if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
+             sed -i -e "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"\"|" ./common/init/Makefile
+          fi
+          # 步骤 3: 强制覆盖版本号（如果提供了输入）
           if [ ! -z ${{ inputs.version }} ]; then
             echo "版本号不为空，强制设置为 ${{ inputs.version }}"
+            # 覆盖 setlocalversion 的最终输出 (uname -r 结果)
             sed -i '$s|echo "\$res"|echo "${{ inputs.version }}"|' ./common/scripts/setlocalversion
             if [ ! -f "build/build.sh" ]; then
+              # 覆盖 CONFIG_LOCALVERSION (Bazel)
               sed -i '/^CONFIG_LOCALVERSION=/ s/="\([^"]*\)"/="${{ inputs.version }}"/' ./common/arch/arm64/configs/gki_defconfig
             fi
-          fi
-          # 更新时间戳（与版本号无关，保持干净）
-          CURRENT_TIME=$(date -u +"%a %b %d %H:%M:%S UTC %Y")
-          echo "CURRENT_TIME=$CURRENT_TIME"
-          perl -pi -e "s{UTS_VERSION=\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\| cut -b -\\\$UTS_LEN\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
-          if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
-            sed -i -e "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"$CURRENT_TIME\"|" ./common/init/Makefile
           fi
       - name: Build with retry
         uses: nick-fields/retry@v3
