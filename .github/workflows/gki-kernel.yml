@@ -213,7 +213,7 @@ jobs:
           fi
 
       - name: 添加 Baseband-guard 支持
-        if: ${{ github.event.inputs.BBG == 'true' }}
+        if: ${{ inputs.BBG == 'true' }}
         run: |
           cd "$CONFIG/common"
           wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
@@ -401,9 +401,6 @@ jobs:
           cd "$CONFIG/common"
           sed -i '/^include \$(srctree)\/scripts\/setlocalversion/d' Makefile
           sed -i '/^EXTRAVERSION =/c\EXTRAVERSION =' Makefile
-          echo "KBUILD_BUILD_USER=" >> $GITHUB_ENV
-          echo "KBUILD_BUILD_HOST=" >> $GITHUB_ENV
-          echo "KBUILD_BUILD_TIMESTAMP=" >> $GITHUB_ENV
           CONFIG_FILE="arch/arm64/configs/gki_defconfig"
           sed -i '/^CONFIG_LOCALVERSION=/d' "$CONFIG_FILE"
           sed -i '/^CONFIG_LOCALVERSION_AUTO=/d' "$CONFIG_FILE"
