@@ -516,7 +516,7 @@ jobs:
             sed -i '$s|echo "\$res"|echo "${{ inputs.version }}"|'
           ./common/scripts/setlocalversion
           else
-            sed -i '$s|echo "\$res"|echo "\$res-zakozakoooooo-1145141919"|'
+            sed -i '$s|echo "\$res"|echo "\$res-zakozakoooooo-11451919810"|'
           ./common/scripts/setlocalversion
           fi
 
