@@ -508,24 +508,43 @@ jobs:
 
       - name: 配置内核名称
         run: |
-          cd "$CONFIG"
+          cd "$CONFIG/common"
           
+          # 1. 极致干净: 修改 Makefile 以去除 sub_level (x.x.xx) 和所有 extraversion 后缀
+          # 清空 EXTRAVERSION (包含 -androidXX-gki-...)
+          sed -i '/^EXTRAVERSION =/ c\EXTRAVERSION =' Makefile
+          
+          # 清空 SUBLEVEL (去除版本号的 .xx 部分)
+          sed -i '/^SUBLEVEL =/ c\SUBLEVEL =' Makefile
+
+          cd .. # Back to $CONFIG dir
+
+          # 2. 清除 setlocalversion 输出 (去除 -gki-suffix, -dirty 等)
           sed -i '$s|echo "\$res"|echo ""|' ./common/scripts/setlocalversion
 
+          # 3. 替换动态 UTS_VERSION/时间戳/标志为静态值
           perl -pi -e "s{UTS_VERSION=\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\| cut -b -\\\$UTS_LEN\)\"}{UTS_VERSION=\"#1 SMP PREEMPT\"}" ./common/scripts/mkcompile_h
 
+          # 4. 清除 init/Makefile 中的构建时间戳
           if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
             sed -i -e "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"\"|" ./common/init/Makefile
           fi
           
+          # 5. 清除 CONFIG_LOCALVERSION 和 Bazel 版本信息
           if [ -f "build/build.sh" ]; then
             sed -i 's/-dirty//' ./common/scripts/setlocalversion
             sed -i '/^CONFIG_LOCALVERSION=/ s/=".*"/=""/' ./common/arch/arm64/configs/gki_defconfig
           else
+            # Bazel (Kleaf) build cleanup
             sed -i '/stable_scmversion_cmd/s/-maybe-dirty//g' ./build/kernel/kleaf/impl/stamp.bzl
             
             sed -i '/^CONFIG_LOCALVERSION=/ s/="\([^"]*\)"/=""/' ./common/arch/arm64/configs/gki_defconfig
 
+            # 尝试清除 Bazel/Kleaf 生成的版本信息
+            sed -i 's/\"linux_kernel_version = .*/\"linux_kernel_version = \"\",/' ./common/kernel_version_override.bzl 2>/dev/null || true
+            sed -i 's/\"gki_version_tag = .*/\"gki_version_tag = \"\",/' ./common/kernel_version_override.bzl 2>/dev/null || true
+            
+            # 清除 ABI/GKI exports
             sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
             rm -rf ./common/android/abi_gki_protected_exports_*
           fi
