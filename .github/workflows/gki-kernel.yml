@@ -510,31 +510,22 @@ jobs:
         run: |
           cd "$CONFIG"
           
-          # 强制 setlocalversion 脚本返回空字符串
           sed -i '$s|echo "\$res"|echo ""|' ./common/scripts/setlocalversion
 
-          # 移除 UTS_VERSION 中的构建时间戳和分支信息，仅保留 #1 SMP PREEMPT
           perl -pi -e "s{UTS_VERSION=\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\| cut -b -\\\$UTS_LEN\)\"}{UTS_VERSION=\"#1 SMP PREEMPT\"}" ./common/scripts/mkcompile_h
 
-          # 移除 init/Makefile 中的构建时间戳（Build Date）
           if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
             sed -i -e "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"\"|" ./common/init/Makefile
           fi
           
           if [ -f "build/build.sh" ]; then
-            # build.sh 系统，移除 -dirty
             sed -i 's/-dirty//' ./common/scripts/setlocalversion
-            # 确保 CONFIG_LOCALVERSION 为空，移除所有 GKI 分支信息
             sed -i '/^CONFIG_LOCALVERSION=/ s/=".*"/=""/' ./common/arch/arm64/configs/gki_defconfig
           else
-            # Bazel 系统
-            # 移除 Bazel 的 -maybe-dirty 后缀
             sed -i '/stable_scmversion_cmd/s/-maybe-dirty//g' ./build/kernel/kleaf/impl/stamp.bzl
             
-            # 确保 CONFIG_LOCALVERSION 为空，移除所有 GKI 分支信息 (例如 androidxx-x)
             sed -i '/^CONFIG_LOCALVERSION=/ s/="\([^"]*\)"/=""/' ./common/arch/arm64/configs/gki_defconfig
 
-            # 清理 BUILD.bazel/ABI 相关配置
             sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
             rm -rf ./common/android/abi_gki_protected_exports_*
           fi
