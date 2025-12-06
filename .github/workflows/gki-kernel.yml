@@ -199,8 +199,9 @@ jobs:
       
       - name: 确定 KernelSU 的分支
         run: |
-          branch_input="${{ inputs.kernelsu_branch }}"
-          variant_input="${{ inputs.kernelsu_variant }}"
+          # 修复：移除输入变量中的潜在空格，确保 case 语句能精确匹配
+          branch_input="$(echo "${{ inputs.kernelsu_branch }}" | xargs)"
+          variant_input="$(echo "${{ inputs.kernelsu_variant }}" | xargs)"
           
           case "$branch_input" in
             "Stable(标准)")
@@ -536,22 +537,8 @@ jobs:
           echo "更改为配置目录: $CONFIG..."
           cd "$CONFIG"
           
-          # 始终只输出基础版本号，移除所有后缀和自定义字符串
-          # $res 变量在 setlocalversion 脚本中通常包含基础版本号
           sed -i '$s|echo "\$res"|echo "${{ inputs.kernel_version }}.${{ inputs.sub_level }}"|' ./common/scripts/setlocalversion
-          # 清除 setlocalversion 中可能残留的 -dirty 后缀
           sed -i 's/-dirty//' ./common/scripts/setlocalversion
-
-
-          # 移除时间戳配置以保持干净的版本字符串
-          # CURRENT_TIME=$(date -u +"%a %b %d %H:%M:%S UTC %Y")
-          # echo "CURRENT_TIME=$CURRENT_TIME"
-          # perl -pi -e "s{UTS_VERSION=\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\| cut -b -\\\$UTS_LEN\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
-          
-          # # 移除 Makefile 的时间戳修改
-          # if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
-          #   sed -i -e "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"$CURRENT_TIME\"|" ./common/init/Makefile
-          # fi
 
           if [ -f "build/build.sh" ];
           then
@@ -559,10 +546,8 @@ jobs:
           else
             sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
             rm -rf ./common/android/abi_gki_protected_exports_*
-            # 移除 stable_scmversion_cmd 中的 -maybe-dirty
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
             
-            # 移除 CONFIG_LOCALVERSION 的设置，确保不添加额外的字符串
             if [ ! -z ${{ inputs.version }} ]; then
               sed -i '/^CONFIG_LOCALVERSION=/ s/="\([^"]*\)"/="${{ inputs.version }}"/' ./common/arch/arm64/configs/gki_defconfig
             fi
