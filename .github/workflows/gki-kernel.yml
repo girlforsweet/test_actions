@@ -506,26 +506,37 @@ jobs:
           
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-      - name: 配置内核名称
+      - name: 配置内核名称 (最终稳定版)
         run: |
+          set -e
+          # 1. 进入 GKI 源码目录
           cd "$CONFIG/common"
+
+          # 2. 核心清理命令
+          # 清空 EXTRAVERSION 和 SUBLEVEL，消除 .xx 后缀
           sed -i '/^EXTRAVERSION =/ c\EXTRAVERSION =' Makefile
           sed -i '/^SUBLEVEL =/ c\SUBLEVEL =' Makefile
+
+          # 强制 setlocalversion 返回空字符串，消除 -gki-xxx 和 Git 后缀 (最关键)
           sed -i '$s|echo "\$res"|echo ""|' ./scripts/setlocalversion
+
+          # 修改 mkcompile_h，固定 UTS_VERSION，消除时间戳
           perl -pi -e "s{UTS_VERSION=\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\| cut -b -\\\$UTS_LEN\)\"}{UTS_VERSION=\"#1 SMP PREEMPT\"}" ./scripts/mkcompile_h
-          sed -i '/^CONFIG_LOCALVERSION=/ s/="[^"]*"//' ./arch/arm64/configs/gki_defconfig
-          sed -i '/^CONFIG_LOCALVERSION_AUTO=/ c\CONFIG_LOCALVERSION_AUTO=n' ./arch/arm64/configs/gki_defconfig
+
+          # 禁用 CONFIG_LOCALVERSION 和 CONFIG_LOCALVERSION_AUTO
+          CONFIG_FILE="./arch/arm64/configs/gki_defconfig"
+          sed -i '/^CONFIG_LOCALVERSION=/ s/="[^"]*"//' "$CONFIG_FILE"
+          sed -i '/^CONFIG_LOCALVERSION_AUTO=/ c\CONFIG_LOCALVERSION_AUTO=n' "$CONFIG_FILE"
+          
+          # 针对新版内核 (6.1/6.6)，移除 init/Makefile 中的 build-timestamp
           if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
             sed -i -e "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"\"|" ./init/Makefile
           fi
-          if [ ! -f "../build/build.sh" ]; then
-            cd ..
-            sed -i 's/\"linux_kernel_version = .*/\"linux_kernel_version = \"\",/' ./common/kernel_version_override.bzl 2>/dev/null || true
-            sed -i 's/\"gki_version_tag = .*/\"gki_version_tag = \"\",/' ./common/kernel_version_override.bzl 2>/dev/null || true
-            sed -i '/stable_scmversion_cmd/s/-maybe-dirty//g' ./build/kernel/kleaf/impl/stamp.bzl
-            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
-            rm -rf ./common/android/abi_gki_protected_exports_* 2>/dev/null || true
-          fi
+
+          # 3. Kleaf/Bazel 兼容性修复 (清理 ABI 保护列表，非版本清理)
+          cd ..
+          sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel 2>/dev/null || true
+          rm -rf ./common/android/abi_gki_protected_exports_* 2>/dev/null || true
             
       - name: Build with retry
         uses: nick-fields/retry@v3
