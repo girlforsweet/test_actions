@@ -238,8 +238,7 @@ jobs:
             exit 1
           fi
           cd ../common
-          FORMATTED_BRANCH="\( {{ inputs.android_version }}- \){{ inputs.kernel_version }}"
-          if grep -q deprecated <<< "$REMOTE_BRANCH" && { [ "\( FORMATTED_BRANCH" == "android12-5.10" ] && [ \){{ inputs.sub_level }} -lt 136 ]; }; then
+          if grep -q deprecated <<< "\( REMOTE_BRANCH" && { [ " \){{ inputs.android_version }}-\( {{ inputs.kernel_version }}" == "android12-5.10" ] && [ \){{ inputs.sub_level }} -lt 136 ]; }; then
             patch -p1 < 50_add_susfs_in_gki-\( {{ inputs.android_version }}- \){{ inputs.kernel_version }}.patch || true
             curl -LSs https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/legacy/fdinfo.c.patch -o fdinfo.c.patch
             patch -p1 < fdinfo.c.patch
@@ -250,28 +249,12 @@ jobs:
       - name: 一些修复补丁
         run: |
           cd "$CONFIG/common"
-          FORMATTED_BRANCH="\( {{ inputs.android_version }}- \){{ inputs.kernel_version }}"
-          fake_patched=0
-          if [ "$FORMATTED_BRANCH" = "android15-6.6" ]; then
+          if [ "\( {{ inputs.android_version }}- \){{ inputs.kernel_version }}" = "android15-6.6" ]; then
             if ! grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
               sed -i -e '/int ret = 0, copied = 0;/a \\tunsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;' -e '/int ret = 0, copied = 0;/a \\tpagemap_entry_t \*res = NULL;' ./fs/proc/task_mmu.c
-              fake_patched=1
             fi
           fi
-          if [ "$FORMATTED_BRANCH" = "android12-5.10" ] || [ "$FORMATTED_BRANCH" = "android13-5.10" ] || [ "$FORMATTED_BRANCH" = "android13-5.15" ]; then
-            if ! grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
-              fake_patched=1
-            fi
-          fi
-          if [ "$fake_patched" = 1 ]; then
-            if [ "$FORMATTED_BRANCH" = "android15-6.6" ]; then
-              sed -i -e '/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' -e '/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c
-            fi
-            if [ "$FORMATTED_BRANCH" = "android12-5.10" ] || [ "$FORMATTED_BRANCH" = "android13-5.10" ] || [ "$FORMATTED_BRANCH" = "android13-5.15" ]; then
-              sed -i -e 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c
-            fi
-          fi
-  
+
       - name: 应用新的HOOKS补丁
         run: |
           cd "$CONFIG/common"
@@ -384,7 +367,7 @@ jobs:
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
 
-      - name: 极致清理内核版本号
+      - name: 配置内核名称
         run: |
           cd "$CONFIG"
           if grep -q "^CONFIG_LOCALVERSION=" ./common/arch/arm64/configs/gki_defconfig; then
@@ -392,15 +375,19 @@ jobs:
           else
             echo 'CONFIG_LOCALVERSION=""' >> ./common/arch/arm64/configs/gki_defconfig
           fi
-          sed -i '/protected_exports_list/d' ./common/BUILD.bazel
-          rm -rf ./common/android/abi_gki_protected_exports_*
-          sed -i '/stable_scmversion_cmd/d' ./build/kernel/kleaf/impl/stamp.bzl
+          sed -i '/^[[:space:]]*"protected_exports_list"/d' ./common/BUILD.bazel || true
+          rm -rf ./common/android/abi_gki_protected_exports_* || true
+          sed -i '/stable_scmversion_cmd/d' ./build/kernel/kleaf/impl/stamp.bzl || true
           sed -i '/-dirty/d' ./build/kernel/kleaf/impl/stamp.bzl || true
           sed -i '/-maybe-dirty/d' ./build/kernel/kleaf/impl/stamp.bzl || true
-          rm -f ./common/scripts/setlocalversion
-          FIXED_TIME="Fri Dec 13 12:00:00 UTC 2025"
-          perl -pi -e "s{UTS_VERSION=\".*\"}{UTS_VERSION=\"#1 SMP PREEMPT $FIXED_TIME\"}" ./common/scripts/mkcompile_h
-          sed -i "s|.*build-timestamp.*|$FIXED_TIME|g" ./common/init/Makefile
+          if [ -f ./common/scripts/setlocalversion ]; then
+            > ./common/scripts/setlocalversion
+          fi
+          FIXED_TIME="Sat Dec 13 00:00:00 UTC 2025"
+          perl -pi -e "s{UTS_VERSION=\".*\"}{UTS_VERSION=\"#1 SMP PREEMPT $FIXED_TIME\"}" ./common/scripts/mkcompile_h || true
+          if [ "\( {{ inputs.kernel_version }}" = "6.1" ] || [ " \){{ inputs.kernel_version }}" = "6.6" ]; then
+            sed -i -e "s|.*build-timestamp.*|$FIXED_TIME|g" ./common/init/Makefile || true
+          fi
 
       - name: Build with retry
         uses: nick-fields/retry@v3
