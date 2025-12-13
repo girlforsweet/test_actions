@@ -504,28 +504,28 @@ jobs:
           # 1. 强制 CONFIG_LOCALVERSION 为空，覆盖可能来自 defconfig 或输入的自定义版本
           sed -i '/^CONFIG_LOCALVERSION=/ s/=.*/=""/' ./common/arch/arm64/configs/gki_defconfig || true
 
-          # 2. 覆盖 setlocalversion 脚本，强制其输出空字符串，忽略 Git SCM 和任何自定义后缀
-          # 这一步是关键，它会覆盖所有 Androidxx-x, -zakozakoooooo-1145141919 和 -dirty 后缀。
-          echo '#!/bin/bash' > ./common/scripts/setlocalversion
-          echo 'echo ""' >> ./common/scripts/setlocalversion
-          chmod +x ./common/scripts/setlocalversion
-          
-          # 3. 还原 mkcompile_h 和 init/Makefile 中的时间戳和版本逻辑（不修改）
-          # 保持这部分与您的原始文件一致，以避免构建中断。
-          
-          # 4. 清理 Kleaf/Bazel SCM 脏标记 (如果存在)
+          # 2. 覆盖 setlocalversion 脚本，只输出基础版本号（通过截断方式实现）
+          # 目的：消除所有 Androidxx-x, -zakozakoooooo-1145141919 和 -dirty 后缀
+          # 原始脚本最后可能是 echo "$res"
+          # 我们将其替换为：执行原始脚本，但只保留第一个字段（即基础版本号）
+          if [ -f "./common/scripts/setlocalversion" ]; then
+             # 先备份，然后覆盖 setlocalversion
+             cp ./common/scripts/setlocalversion ./common/scripts/setlocalversion.bak
+             
+             # 确保新脚本只输出基础版本号（通过截断原始输出的第一个字段）
+             echo '#!/bin/bash' > ./common/scripts/setlocalversion
+             echo 'exec ./common/scripts/setlocalversion.bak | awk "{print \$1}"' >> ./common/scripts/setlocalversion
+             chmod +x ./common/scripts/setlocalversion
+          fi
+
+          # 3. 清理 Kleaf/Bazel SCM 脏标记 (如果存在)
           if [ ! -f "build/build.sh" ]; then
             sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel || true
             rm -rf ./common/android/abi_gki_protected_exports_* || true
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl || true
           fi
           
-          # 原始工作流中保留的与时间相关的逻辑 (不再修改):
-          # CURRENT_TIME=$(date -u +"%a %b %d %H:%M:%S UTC %Y")
-          # perl -pi -e "s{UTS_VERSION=\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\| cut -b -\\\$UTS_LEN\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
-          # if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
-          #   sed -i -e "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"$CURRENT_TIME\"|" ./common/init/Makefile
-          # fi
+          # 保持 mkcompile_h 和 init/Makefile 中的时间戳逻辑不变，如您的要求。
 
 
       - name: Build with retry
