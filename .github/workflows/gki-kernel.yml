@@ -523,7 +523,6 @@ jobs:
 
           # 插入 awk 截断逻辑，只保留版本号（覆盖最终输出行）
           # 这确保了无论 $res 包含什么（例如 6.6.66-android15-8-gXXX），都只输出 6.6.66
-          # 这一行是强制截断所有后续附加信息的关键
           sed -i '/echo "\$res"/c echo "$res" | awk "{print \$1}"' ./common/scripts/setlocalversion || true
           
           # 3. 清理 Kleaf/Bazel SCM 脏标记
