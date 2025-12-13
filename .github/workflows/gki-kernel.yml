@@ -375,11 +375,10 @@ jobs:
           else
             echo 'CONFIG_LOCALVERSION=""' >> ./common/arch/arm64/configs/gki_defconfig
           fi
-          sed -i '/^[[:space:]]*"protected_exports_list"/d' ./common/BUILD.bazel || true
+          sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel || true
           rm -rf ./common/android/abi_gki_protected_exports_* || true
-          sed -i '/stable_scmversion_cmd/d' ./build/kernel/kleaf/impl/stamp.bzl || true
+          sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl || true
           sed -i '/-dirty/d' ./build/kernel/kleaf/impl/stamp.bzl || true
-          sed -i '/-maybe-dirty/d' ./build/kernel/kleaf/impl/stamp.bzl || true
           if [ -f ./common/scripts/setlocalversion ]; then
             > ./common/scripts/setlocalversion
           fi
@@ -387,9 +386,6 @@ jobs:
           perl -pi -e "s{UTS_VERSION=\".*\"}{UTS_VERSION=\"#1 SMP PREEMPT $FIXED_TIME\"}" ./common/scripts/mkcompile_h || true
           if [ "\( {{ inputs.kernel_version }}" = "6.1" ] || [ " \){{ inputs.kernel_version }}" = "6.6" ]; then
             sed -i -e "s|.*build-timestamp.*|$FIXED_TIME|g" ./common/init/Makefile || true
-          fi
-          if [ ! -z ${{ inputs.version }} ]; then
-            sed -i '/^CONFIG_LOCALVERSION=/c\CONFIG_LOCALVERSION="-${{ inputs.version }}"' ./common/arch/arm64/configs/gki_defconfig || true
           fi
 
       - name: Build with retry
@@ -461,17 +457,17 @@ jobs:
       - name: 创建不同格式的ZIP文件
         run: |
           cd ./AnyKernel3
-          ZIP_NAME="\( {{ inputs.android_version }}- \){{ inputs.kernel_version }}.\( {{ inputs.sub_level }}- \){{ inputs.os_patch_level }}-AnyKernel3.zip"
+          ZIP_NAME1="\( {{ inputs.android_version }}- \){{ inputs.kernel_version }}.\( {{ inputs.sub_level }}- \){{ inputs.os_patch_level }}-AnyKernel3.zip"
           mv ../Image ./Image
-          zip -r "../$ZIP_NAME" ./*
+          zip -r "../$ZIP_NAME1" ./*
           rm ./Image
-          ZIP_NAME="\( {{ inputs.android_version }}- \){{ inputs.kernel_version }}.\( {{ inputs.sub_level }}- \){{ inputs.os_patch_level }}-AnyKernel3-lz4.zip"
+          ZIP_NAME2="\( {{ inputs.android_version }}- \){{ inputs.kernel_version }}.\( {{ inputs.sub_level }}- \){{ inputs.os_patch_level }}-AnyKernel3-lz4.zip"
           mv ../Image.lz4 ./Image.lz4
-          zip -r "../$ZIP_NAME" ./*
+          zip -r "../$ZIP_NAME2" ./*
           rm ./Image.lz4
-          ZIP_NAME="\( {{ inputs.android_version }}- \){{ inputs.kernel_version }}.\( {{ inputs.sub_level }}- \){{ inputs.os_patch_level }}-AnyKernel3-gz.zip"
+          ZIP_NAME3="\( {{ inputs.android_version }}- \){{ inputs.kernel_version }}.\( {{ inputs.sub_level }}- \){{ inputs.os_patch_level }}-AnyKernel3-gz.zip"
           mv ../Image.gz ./Image.gz
-          zip -r "../$ZIP_NAME" ./*
+          zip -r "../$ZIP_NAME3" ./*
           rm ./Image.gz
 
       - name: 运行boot镜像 ${{ inputs.android_version }} 编译脚本
