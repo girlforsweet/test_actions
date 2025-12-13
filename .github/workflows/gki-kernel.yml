@@ -544,16 +544,17 @@ jobs:
           cd "$CONFIG"
           
           # 1. 强制清理 setlocalversion 脚本中的所有自定义/默认后缀和脏标记 (-dirty)
+          # setlocalversion负责处理本地版本字符串，需要确保它只返回基准版本号 (x.x.xx)
           if [ -f "common/scripts/setlocalversion" ]; then
-            # 替换 setlocalversion 脚本的末尾逻辑，只回显 $res (即 x.x.xx)
-            # 确保删除了所有添加自定义或 SCM 后缀的逻辑
+            # 使用 sed 确保 setlocalversion 脚本的末尾逻辑只输出 $res (即 x.x.xx)
+            # 删除了所有添加自定义或 SCM 后缀的逻辑
             sed -i '/^setlocalversion()/!b; /echo "\$res"/!b; /echo/ { s/echo "\$res.*"/echo "\$res"/g; q}' ./common/scripts/setlocalversion
             # 移除 setlocalversion 中可能添加的 -dirty 后缀
             sed -i 's/-dirty//g' ./common/scripts/setlocalversion
           fi
 
           # 2. 彻底移除编译时间戳、用户和主机名 (UTS_VERSION)
-          # 替换 mkcompile_h 中 UTS_VERSION 的定义，将其设为最短、最干净的占位符（#1 ）
+          # 替换 mkcompile_h 中 UTS_VERSION 的定义，将其设为最短、最干净的占位符（例如 #1 ）
           perl -pi -e "s{UTS_VERSION=\\\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\\| cut -b -\\\$UTS_LEN\)\\\"}{UTS_VERSION=\\\"#1 \\\"}" ./common/scripts/mkcompile_h
           
           # 清理 init/Makefile 中对 build-timestamp 的引用 (针对 6.1/6.6)，彻底去除时间元数据
@@ -561,7 +562,7 @@ jobs:
             sed -i -E "s|\\\$(preempt-flag-y) \"\\\$(build-timestamp)\"|\\\$(preempt-flag-y)|" ./common/init/Makefile
           fi
 
-          # 3. 处理 Bazel 构建系统的 SCM 污染
+          # 3. 处理 Bazel 构建系统的 SCM 污染和 ABI 检查（Bazel 构建使用）
           if [ ! -f "build/build.sh" ]; then
             # 移除 Bazel 构建系统的 SCM 版本控制 (会移除 -maybe-dirty)
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
@@ -570,7 +571,7 @@ jobs:
             rm -rf ./common/android/abi_gki_protected_exports_*
           fi
 
-          # 4. 移除或清空 CONFIG_LOCALVERSION
+          # 4. 移除或清空 CONFIG_LOCALVERSION (Kconfig 配置中可能添加的后缀)
           CONFIG_FILE="./common/arch/arm64/configs/gki_defconfig"
           # 替换 CONFIG_LOCALVERSION="<any value>" 为 CONFIG_LOCALVERSION=""，确保没有额外的 CONFIG 后缀
           sed -E -i 's/^CONFIG_LOCALVERSION=.*$/CONFIG_LOCALVERSION=""/' "$CONFIG_FILE"
