@@ -429,6 +429,7 @@ jobs:
         run: |
           set -x
           set -e
+          echo "写入LZ4KD&ZSTDN config依赖"
           CONFIG_FILE="$CONFIG/common/arch/arm64/configs/gki_defconfig"
 
           if [ "${{ inputs.kernel_version }}" = "5.10" ]; then
@@ -440,9 +441,12 @@ jobs:
           fi
 
           if [ "${{ inputs.kernel_version }}" != "6.6" ] && [ "${{ inputs.kernel_version }}" != "5.10" ]; then
+            # sed -i 's/CONFIG_MODULE_SIG=y/CONFIG_MODULE_SIG=n/g' "$CONFIG_FILE"
             if grep -q "CONFIG_ZSMALLOC" -- "$CONFIG_FILE"; then
+                echo "提示：文件 $CONFIG_FILE 包含字符串 CONFIG_ZSMALLOC。"
                 sed -i 's/CONFIG_ZSMALLOC=m/CONFIG_ZSMALLOC=y/g' "$CONFIG_FILE"
             else
+                echo "警告：文件 $CONFIG_FILE 不包含字符串 CONFIG_ZSMALLOC。"
                 echo "CONFIG_ZSMALLOC=y" >> "$CONFIG_FILE"
             fi
 
@@ -457,6 +461,7 @@ jobs:
           if [ "${{ inputs.android_version }}" = "android14" ] || [ "${{ inputs.android_version }}" = "android15" ]; then
             sed -i 's/"drivers\/block\/zram\/zram\.ko",//g; s/"mm\/zsmalloc\.ko",//g' "$CONFIG/common/modules.bzl"
             echo "CONFIG_MODULE_SIG_FORCE=n" >> "$CONFIG_FILE"
+            echo 'Android14_Bazel:已修复zram&zsmalloc'
           fi
 
           if grep -q "CONFIG_ZSMALLOC=y" "$CONFIG_FILE" && grep -q "CONFIG_ZRAM=y" "$CONFIG_FILE"; then
@@ -472,11 +477,15 @@ jobs:
         if: ${{ inputs.set_defbbr }}
         run: |
           CONFIG_FILE="$CONFIG/common/arch/arm64/configs/gki_defconfig"
+          echo "Changing to configuration directory: $CONFIG_FILE..."
           echo "CONFIG_DEFAULT_BBR=y" >> "$CONFIG_FILE"
            
       - name: 添加SUSFS配置设置
         run: |
+          echo "更改为配置目录: $CONFIG..."
           cd "$CONFIG"
+          echo "Adding configuration settings to gki_defconfig..."
+
           # Add KSU configuration settings
           echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
 
@@ -538,7 +547,7 @@ jobs:
           if [ -f "common/scripts/setlocalversion" ]; then
             # 替换 setlocalversion 脚本的末尾逻辑，只回显 $res (即 x.x.xx)
             # 确保删除了所有添加自定义或 SCM 后缀的逻辑
-            sed -i '/^setlocalversion()/!b; /echo "\$res"/!b; /echo/ { s/echo "\$res.*"/echo "\$res"/; q}' ./common/scripts/setlocalversion
+            sed -i '/^setlocalversion()/!b; /echo "\$res"/!b; /echo/ { s/echo "\$res.*"/echo "\$res"/g; q}' ./common/scripts/setlocalversion
             # 移除 setlocalversion 中可能添加的 -dirty 后缀
             sed -i 's/-dirty//g' ./common/scripts/setlocalversion
           fi
@@ -546,12 +555,14 @@ jobs:
           # 2. 彻底移除编译时间戳、用户和主机名 (UTS_VERSION)
           # 替换 mkcompile_h 中 UTS_VERSION 的定义，将其设为最短、最干净的占位符（#1 ）
           perl -pi -e "s{UTS_VERSION=\\\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\\| cut -b -\\\$UTS_LEN\)\\\"}{UTS_VERSION=\\\"#1 \\\"}" ./common/scripts/mkcompile_h
+          
+          # 清理 init/Makefile 中对 build-timestamp 的引用 (针对 6.1/6.6)，彻底去除时间元数据
+          if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
+            sed -i -E "s|\\\$(preempt-flag-y) \"\\\$(build-timestamp)\"|\\\$(preempt-flag-y)|" ./common/init/Makefile
+          fi
 
-          # 3. 处理 build/build.sh 和 Bazel 构建系统的 SCM 污染
-          if [ -f "build/build.sh" ]; then
-            # 移除 build.sh 构建中的 -dirty 标记（二次确保）
-            sed -i 's/-dirty//g' ./common/scripts/setlocalversion
-          else
+          # 3. 处理 Bazel 构建系统的 SCM 污染
+          if [ ! -f "build/build.sh" ]; then
             # 移除 Bazel 构建系统的 SCM 版本控制 (会移除 -maybe-dirty)
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
             # 移除可能存在的 abi_gki_protected_exports 文件引用，保持干净
@@ -563,12 +574,6 @@ jobs:
           CONFIG_FILE="./common/arch/arm64/configs/gki_defconfig"
           # 替换 CONFIG_LOCALVERSION="<any value>" 为 CONFIG_LOCALVERSION=""，确保没有额外的 CONFIG 后缀
           sed -E -i 's/^CONFIG_LOCALVERSION=.*$/CONFIG_LOCALVERSION=""/' "$CONFIG_FILE"
-          
-          # 清理 init/Makefile 中的时间戳引用 (针对 6.1/6.6)
-          if [ "${{ inputs.kernel_version }}" = "6.1" ] || [ "${{ inputs.kernel_version }}" = "6.6" ]; then
-            # 移除 init/Makefile 中对 build-timestamp 的引用，确保干净
-            sed -i -E "s|\\\$(preempt-flag-y) \"\\\$(build-timestamp)\"|\\\$(preempt-flag-y)|" ./common/init/Makefile
-          fi
 
       - name: Build with retry
         uses: nick-fields/retry@v3
@@ -627,8 +632,10 @@ jobs:
       - name: 创建Bootimgs文件夹并复制镜像
         if: ${{ inputs.android_version == 'android12' || inputs.android_version == 'android13' }}
         run: |
+          echo "更改为配置目录: $CONFIG..."
           mkdir bootimgs
 
+          echo "Creating bootimgs folder and copying images..."
           cp ./$CONFIG/out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist/Image ./bootimgs
           cp ./$CONFIG/out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist/Image.lz4 ./bootimgs
           cp ./$CONFIG/out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist/Image ./
@@ -640,8 +647,10 @@ jobs:
       - name: 创建Bootimgs文件夹并复制镜像
         if: ${{ inputs.android_version == 'android14' || inputs.android_version == 'android15' }}
         run: |
+          echo "更改为配置目录: $CONFIG..."
           mkdir bootimgs
 
+          echo "Creating bootimgs folder and copying images..."
           cp ./$CONFIG/bazel-bin/common/kernel_aarch64/Image ./bootimgs
           cp ./$CONFIG/bazel-bin/common/kernel_aarch64/Image.lz4 ./bootimgs
           cp ./$CONFIG/bazel-bin/common/kernel_aarch64/Image ./
@@ -652,20 +661,24 @@ jobs:
 
       - name: 创建不同格式的ZIP文件
         run: |
+          echo "Creating zip files for all formats..."
           cd ./AnyKernel3
 
           # Create and upload zip for each format
           ZIP_NAME="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-AnyKernel3.zip"
+          echo "Creating zip file: $ZIP_NAME..."
           mv ../Image ./Image
           zip -r "../$ZIP_NAME" ./*
           rm ./Image
 
           ZIP_NAME="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-AnyKernel3-lz4.zip"
+          echo "Creating zip file: $ZIP_NAME..."
           mv ../Image.lz4 ./Image.lz4
           zip -r "../$ZIP_NAME" ./*
           rm ./Image.lz4
 
           ZIP_NAME="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-AnyKernel3-gz.zip"
+          echo "Creating zip file: $ZIP_NAME..."
           mv ../Image.gz ./Image.gz
           zip -r "../$ZIP_NAME" ./*
           rm ./Image.gz
@@ -673,37 +686,49 @@ jobs:
       - name: 运行boot镜像 ${{ inputs.android_version }} 编译脚本
         if: ${{ inputs.android_version == 'android12' }}
         run: |
+          echo "更改为配置目录: $CONFIG..."
           cd bootimgs
 
           GKI_URL=https://dl.google.com/android/gki/gki-certified-boot-android12-5.10-"${{ inputs.os_patch_level }}"_"${{ inputs.revision }}".zip
           FALLBACK_URL=https://dl.google.com/android/gki/gki-certified-boot-android12-5.10-2023-01_r1.zip
 
           # Check if the GKI URL is available
+          echo "Checking if GKI kernel URL is reachable: $GKI_URL"
           status=$(curl -sL -w "%{http_code}" "$GKI_URL" -o /dev/null)
 
           if [ "$status" = "200" ]; then
+              echo "[+] Downloading from GKI_URL"
               curl -Lo gki-kernel.zip "$GKI_URL"
           else
+              echo "[+] $GKI_URL not found, using $FALLBACK_URL"
               curl -Lo gki-kernel.zip "$FALLBACK_URL"
           fi
 
           # Unzip the downloaded kernel and remove the zip
+          echo "Unzipping the downloaded kernel..."
           unzip gki-kernel.zip && rm gki-kernel.zip
 
+          echo "Unpacking boot.img..."
           FULL_PATH=$(pwd)/boot-5.10.img
+          echo "Unpacking using: $FULL_PATH"
 
+          echo "Running unpack_bootimg.py..."
           $UNPACK_BOOTIMG --boot_img="$FULL_PATH"
 
+          echo "Building Image.gz"
           gzip -n -k -f -9 ./Image > ./Image.gz
 
+          echo "Building boot.img"
           $MKBOOTIMG --header_version 4 --kernel Image --output boot.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
           cp ./boot.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot.img
 
+          echo "Building boot-gz.img"
           $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
           cp ./boot-gz.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-gz.img
 
+          echo "Building boot-lz4.img"
           $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
           cp ./boot-lz4.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-lz4.img
@@ -713,16 +738,20 @@ jobs:
         run: |
           cd bootimgs
 
+          echo "Building Image.gz"
           gzip -n -k -f -9 ./Image > ./Image.gz
 
+          echo "Building boot.img"
           $MKBOOTIMG --header_version 4 --kernel Image --output boot.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
           cp ./boot.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot.img
 
+          echo "Building boot-gz.img"
           $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
           cp ./boot-gz.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-gz.img
 
+          echo "Building boot-lz4.img"
           $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
           cp ./boot-lz4.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-lz4.img
