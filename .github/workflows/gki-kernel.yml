@@ -1,10 +1,10 @@
 name: GKI Kernel Build
 permissions:
-  contents: write  # Allow writing to repository contents (for pushing tags)
-  actions: write   # Allows triggering actions
+  contents: write
+  actions: write
 
 on:
-  workflow_call: # This allows this workflow to be called from another workflow
+  workflow_call:
     inputs:
       make_release:
         required: true
@@ -28,9 +28,6 @@ on:
       kernelsu_branch:
         required: true
         type: string
-      # kernelsu_branch_other:
-      #   required: false
-      #   type: string
       revision:
         required: false
         type: string
@@ -65,27 +62,22 @@ jobs:
       - name: Maximize Build Space
         uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          remove-dotnet: 'true'          # Frees ~2 GB
-          remove-android: 'true'         # Frees ~9 GB
-          remove-haskell: 'true'         # Frees ~5.2 GB
-          remove-codeql: 'true'          # Frees ~5.4 GB
-          remove-docker-images: 'true'   # Frees ~3.2 GB
-          remove-large-packages: 'true'  # Frees ~3.1 GB
-          remove-swapfile: 'true'        # Frees ~4 GB
-          remove-cached-tools: 'false'   # Avoid unless confirmed safe
-          verbose: 'true'                # Enable detailed logging
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'false'
+          verbose: 'true'
           
       - name: 设定 CONFIG 环境变量
         run: |
-          # Set CONFIG dynamically based on inputs values
           CONFIG="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}"
-
-          # Set CONFIG as an environment variable for future steps
           echo "CONFIG=$CONFIG" >> $GITHUB_ENV
-
           echo "CONFIG set to: $CONFIG"
 
-      # Install ccache
       - name: 安装 ccache
         run: sudo apt update && sudo apt upgrade -y && sudo apt install -y ccache python3 git curl
 
@@ -114,7 +106,6 @@ jobs:
             mkbootimg
           key: toolchain-${{ runner.os }}-v1
 
-      # Step 2: Download toolchain if cache was not found
       - name: 下载工具链（如果未找到缓存）
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
@@ -138,7 +129,6 @@ jobs:
 
       - name: 安装仓库
         run: |
-          # Install dependencies
           mkdir -p ./git-repo
           curl https://storage.googleapis.com/git-repo-downloads/repo > ./git-repo/repo
           chmod a+rx ./git-repo/repo
@@ -151,24 +141,17 @@ jobs:
           ANYKERNEL_BRANCH="gki-2.0"
           SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
 
-          # Debug print the branches
           echo "Using branch for SUSFS: $SUSFS_BRANCH"
 
-          # Clone repositories using the branch names
           git clone https://github.com/WildPlusKernel/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
           git clone https://github.com/ShirkNeko/susfs4ksu.git -b "$SUSFS_BRANCH"
           git clone https://github.com/Tools-cx-app/kernel_patches.git
-          # Sukisu的补丁仓库
           git clone https://github.com/ShirkNeko/SukiSU_patch.git
           
       - name: 设置 CONFIG 环境变量
         run: |
-          # Set CONFIG dynamically based on inputs values
           CONFIG="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}"
-
-          # Set CONFIG as an environment variable for future steps
           echo "CONFIG=$CONFIG" >> $GITHUB_ENV
-
           echo "CONFIG set to: $CONFIG"
 
       - name: 初始化和同步内核源代码
@@ -177,18 +160,15 @@ jobs:
           mkdir -p "$CONFIG"
           cd "$CONFIG"
 
-          # Initialize and sync kernel source
           echo "Initializing and syncing kernel source..."
           FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}"
           $REPO init --depth=1 --u https://android.googlesource.com/kernel/manifest -b common-${FORMATTED_BRANCH} --repo-rev=v2.16
           REMOTE_BRANCH=$(git ls-remote https://android.googlesource.com/kernel/common ${FORMATTED_BRANCH})
           DEFAULT_MANIFEST_PATH=.repo/manifests/default.xml
-          # Check if branch is deprecated
           if grep -q deprecated <<< $REMOTE_BRANCH; then
             echo "Found deprecated branch: $FORMATTED_BRANCH"
             sed -i "s/\"${FORMATTED_BRANCH}\"/\"deprecated\/${FORMATTED_BRANCH}\"/g" $DEFAULT_MANIFEST_PATH
           fi
-          # Sync repo and apply patches
           $REPO --version
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
@@ -533,16 +513,18 @@ jobs:
           echo "更改为配置目录: $CONFIG..."
           cd "$CONFIG"
           
-          # 1. 强制 CONFIG_LOCALVERSION 为空
+          # 1. 强制 CONFIG_LOCALVERSION 为空，消除 defconfig/用户输入中的自定义后缀
           sed -i '/^CONFIG_LOCALVERSION=/ s/=.*/""/' ./common/arch/arm64/configs/gki_defconfig || true
 
-          # 2. 修改 setlocalversion 脚本，只输出核心版本号
+          # 2. 覆盖 setlocalversion 脚本输出，只保留核心版本号
           # 移除原始脚本中所有自定义版本号和 zakozakoooooo-1145141919 后缀的逻辑
+          # 这些 sed 命令基于您原始代码的结构
           sed -i '/if \[ ! -z \$\{\{ inputs.version \}\} \]; then/,/fi/d' ./common/scripts/setlocalversion || true
           sed -i '/echo "\$res-zakozakoooooo-1145141919"/d' ./common/scripts/setlocalversion || true
 
           # 插入 awk 截断逻辑，只保留版本号（覆盖最终输出行）
           # 这确保了无论 $res 包含什么（例如 6.6.66-android15-8-gXXX），都只输出 6.6.66
+          # 注意：这是对原始代码中 'echo "$res"' 行的精确替换
           sed -i '/echo "\$res"/c echo "$res" | awk "{print \$1}"' ./common/scripts/setlocalversion || true
           
           # 3. 清理 Kleaf/Bazel SCM 脏标记
