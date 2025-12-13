@@ -501,23 +501,23 @@ jobs:
         run: |
           cd "$CONFIG"
           
-          # 1. 强制 CONFIG_LOCALVERSION 在 defconfig 中为空，防止任何自定义后缀
+          # 1. 强制 CONFIG_LOCALVERSION 在 defconfig 中为空
           sed -i '/^CONFIG_LOCALVERSION=/ s/=.*/=""/' ./common/arch/arm64/configs/gki_defconfig || true
 
           # 2. 移除原始脚本中所有自定义版本号和 zakozakoooooo-1145141919 后缀的逻辑
-          sed -i '/if \[ ! -z \$\{\{ inputs.version \}\} \]; then/,/fi/d' ./common/scripts/setlocalversion
-          sed -i '/echo "\$res-zakozakoooooo-1145141919"/d' ./common/scripts/setlocalversion
+          sed -i '/if \[ ! -z \$\{\{ inputs.version \}\} \]; then/,/fi/d' ./common/scripts/setlocalversion || true
+          sed -i '/echo "\$res-zakozakoooooo-1145141919"/d' ./common/scripts/setlocalversion || true
 
-          # 3. 移除 mkcompile_h 和 Makefile 中的时间戳和版本信息
-          # 移除 mkcompile_h 中的时间戳逻辑
+          # 3. 移除 mkcompile_h 中的时间戳逻辑，强制静态 UTS_VERSION
+          # 仅保留 #1 SMP PREEMPT，这是内核版本最干净的状态
           perl -pi -e 's{UTS_VERSION=\\\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\\| cut -b -\\\$UTS_LEN\)\\\"}{UTS_VERSION=\\\"#1 SMP PREEMPT\\\"}' ./common/scripts/mkcompile_h || true
 
-          # 移除 init/Makefile 中的构建时间戳逻辑 (针对 6.1/6.6)
+          # 4. 移除 init/Makefile 中的构建时间戳逻辑 (针对 6.1/6.6)
           if [ "${{ inputs.kernel_version }}" == "6.1" ] || [ "${{ inputs.kernel_version }}" == "6.6" ]; then
             sed -i -E "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"\"|" ./common/init/Makefile || true
           fi
           
-          # 4. 移除 Bazel/Kleaf 构建系统中的 "-maybe-dirty" SCM 标签
+          # 5. 移除 Bazel/Kleaf 构建系统中的 "-maybe-dirty" SCM 标签
           if [ ! -f "build/build.sh" ]; then
             sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel || true
             rm -rf ./common/android/abi_gki_protected_exports_* || true
