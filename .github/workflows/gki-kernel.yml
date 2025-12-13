@@ -175,6 +175,7 @@ jobs:
             patch -p1 < fix_5.15.legacy.patch
           fi
       
+      # 强制清理 Bazel/Kleaf 版本信息 (核心修改)
       - name: 强制清理 Kleaf/Bazel SCM 版本逻辑
         run: |
           set -e
