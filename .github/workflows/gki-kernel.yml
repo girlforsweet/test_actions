@@ -71,7 +71,7 @@ jobs:
           remove-swapfile: 'true'
           remove-cached-tools: 'false'
           verbose: 'true'
-
+          
       - name: 设定 CONFIG 环境变量
         run: |
           CONFIG="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}"
@@ -500,26 +500,23 @@ jobs:
       - name: 配置内核名称
         run: |
           cd "$CONFIG"
-          
-          # 强制 setlocalversion 输出空字符串，以确保 CONFIG_LOCALVERSION 没有任何后缀。
-          echo "#!/bin/bash" > ./common/scripts/setlocalversion
-          echo "echo \"\"" >> ./common/scripts/setlocalversion
+
+          # 1. 确保 CONFIG_LOCALVERSION 在 defconfig 中为空，防止任何自定义后缀
+          sed -i '/^CONFIG_LOCALVERSION=/ s/=.*/=""/' ./common/arch/arm64/configs/gki_defconfig || true
+
+          # 2. 强制 setlocalversion 脚本输出空字符串，移除所有 SCM/Git 状态和自定义版本号
+          echo '#!/bin/bash' > ./common/scripts/setlocalversion
+          echo 'echo ""' >> ./common/scripts/setlocalversion
           chmod +x ./common/scripts/setlocalversion
 
-          # 跳过所有自定义UTS_VERSION和版本输入逻辑，依赖内核默认的干净版本。
-          
-          if [ -f "build/build.sh" ]; then
-            # 移除 build.sh 的 -dirty 标记
-            sed -i 's/-dirty//' ./common/scripts/setlocalversion
-          else
-            # Bazel 构建清理：移除 abi_gki_protected_exports 和 -maybe-dirty
-            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
-            rm -rf ./common/android/abi_gki_protected_exports_*
-            sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
-            # 确保 defconfig 中的 CONFIG_LOCALVERSION 为空
-            sed -i '/^CONFIG_LOCALVERSION=/ s/=\(.*\)/=""/' ./common/arch/arm64/configs/gki_defconfig || true
+          # 3. 移除 Kleaf/Bazel 构建系统中的 "-maybe-dirty" SCM 标签和 ABI 导出列表 (如果存在)
+          if [ ! -f "build/build.sh" ]; then
+            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel || true
+            rm -rf ./common/android/abi_gki_protected_exports_* || true
+            sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl || true
           fi
-
+          # 确保不进行 mkcompile_h 或 init/Makefile 的日期/时间修改，以获得干净的 UTS_VERSION
+            
       - name: Build with retry
         uses: nick-fields/retry@v3
         with:
