@@ -323,21 +323,21 @@ jobs:
             fi
           fi
           
-          if [ "$FORMATTED_BRANCH" = "android12-5.10" ] || [ "$FORMATTED_BRANCH" = "android13-5.10" ] || [ "$FORMATTED_BRANCH" = "android13-5.15" ]; then
+          if [ "$FORMATTED_BRANCH" == "android12-5.10" ] || [ "$FORMATTED_BRANCH" == "android13-5.10" ] || [ "$FORMATTED_BRANCH" == "android13-5.15" ]; then
             if ! grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
               echo "未找到 vma_pages,正在进行补丁修复"
               fake_patched=1
             fi
           fi
 
-          if [ "$fake_patched" = 1 ]; then
-            if [ "$FORMATTED_BRANCH" = "android15-6.6" ]; then
+          if [ "$fake_patched" == 1 ]; then
+            if [ "$FORMATTED_BRANCH" == "android15-6.6" ]; then
               if grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
                 sed -i -e '/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' -e '/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c
               fi
             fi
             
-            if [ "$FORMATTED_BRANCH" = "android12-5.10" ] || [ "$FORMATTED_BRANCH" = "android13-5.10" ] || [ "$FORMATTED_BRANCH" = "android13-5.15" ]; then
+            if [ "$FORMATTED_BRANCH" == "android12-5.10" ] || [ "$FORMATTED_BRANCH" == "android13-5.10" ] || [ "$FORMATTED_BRANCH" == "android13-5.15" ]; then
               if grep -qxF $'\t\tgoto show_pad;' ./fs/proc/task_mmu.c; then
                 sed -i -e 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c
               fi
@@ -397,7 +397,7 @@ jobs:
           echo "写入LZ4KD&ZSTDN config依赖"
           CONFIG_FILE="$CONFIG/common/arch/arm64/configs/gki_defconfig"
 
-          if [ "${{ inputs.kernel_version }}" = "5.10" ]; then
+          if [ "${{ inputs.kernel_version }}" == "5.10" ]; then
             echo "CONFIG_ZSMALLOC=y" >> "$CONFIG_FILE"
             echo "CONFIG_ZRAM=y" >> "$CONFIG_FILE"
             echo "CONFIG_MODULE_SIG=n" >> "$CONFIG_FILE"
@@ -417,12 +417,12 @@ jobs:
             sed -i 's/CONFIG_ZRAM=m/CONFIG_ZRAM=y/g' "$CONFIG_FILE"
           fi
 
-          if [ "${{ inputs.kernel_version }}" = "6.6" ]; then
+          if [ "${{ inputs.kernel_version }}" == "6.6" ]; then
             echo "CONFIG_ZSMALLOC=y" >> "$CONFIG_FILE"
             sed -i 's/CONFIG_ZRAM=m/CONFIG_ZRAM=y/g' "$CONFIG_FILE"
           fi
 
-          if [ "${{ inputs.android_version }}" = "android14" ] || [ "${{ inputs.android_version }}" = "android15" ]; then
+          if [ "${{ inputs.android_version }}" == "android14" ] || [ "${{ inputs.android_version }}" == "android15" ]; then
             sed -i 's/"drivers\/block\/zram\/zram\.ko",//g; s/"mm\/zsmalloc\.ko",//g' "$CONFIG/common/modules.bzl"
             echo "CONFIG_MODULE_SIG_FORCE=n" >> "$CONFIG_FILE"
             echo 'Android14_Bazel:已修复zram&zsmalloc'
@@ -500,23 +500,29 @@ jobs:
       - name: 配置内核名称
         run: |
           cd "$CONFIG"
-
-          # 1. 确保 CONFIG_LOCALVERSION 在 defconfig 中为空，防止任何自定义后缀
+          
+          # 清理 CONFIG_LOCALVERSION 确保 defconfig 中为空
           sed -i '/^CONFIG_LOCALVERSION=/ s/=.*/=""/' ./common/arch/arm64/configs/gki_defconfig || true
 
-          # 2. 强制 setlocalversion 脚本输出空字符串，移除所有 SCM/Git 状态和自定义版本号
+          # 强制 setlocalversion 脚本输出空字符串，移除所有 SCM/Git 状态和自定义版本号
           echo '#!/bin/bash' > ./common/scripts/setlocalversion
           echo 'echo ""' >> ./common/scripts/setlocalversion
           chmod +x ./common/scripts/setlocalversion
 
-          # 3. 移除 Kleaf/Bazel 构建系统中的 "-maybe-dirty" SCM 标签和 ABI 导出列表 (如果存在)
+          # 移除 mkcompile_h 和 init/Makefile 中的构建时间戳逻辑
+          perl -pi -e 's{UTS_VERSION=\\\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\\| cut -b -\\\$UTS_LEN\)\\\"}{UTS_VERSION=\\\"#1 SMP PREEMPT\\\"}' ./common/scripts/mkcompile_h || true
+
+          if [ "${{ inputs.kernel_version }}" == "6.1" ] || [ "${{ inputs.kernel_version }}" == "6.6" ]; then
+            sed -i -E "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"\"|" ./common/init/Makefile || true
+          fi
+          
+          # 移除 Bazel/Kleaf 中的 SCM 脏标记逻辑和 ABI 导出列表
           if [ ! -f "build/build.sh" ]; then
             sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel || true
             rm -rf ./common/android/abi_gki_protected_exports_* || true
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl || true
           fi
-          # 确保不进行 mkcompile_h 或 init/Makefile 的日期/时间修改，以获得干净的 UTS_VERSION
-            
+
       - name: Build with retry
         uses: nick-fields/retry@v3
         with:
@@ -630,7 +636,7 @@ jobs:
           echo "Checking if GKI kernel URL is reachable: $GKI_URL"
           status=$(curl -sL -w "%{http_code}" "$GKI_URL" -o /dev/null)
 
-          if [ "$status" = "200" ]; then
+          if [ "$status" == "200" ]; then
               echo "[+] Downloading from GKI_URL"
               curl -Lo gki-kernel.zip "$GKI_URL"
           else
