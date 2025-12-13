@@ -504,27 +504,27 @@ jobs:
           # 1. 强制 CONFIG_LOCALVERSION 在 defconfig 中为空，防止任何自定义后缀
           sed -i '/^CONFIG_LOCALVERSION=/ s/=.*/=""/' ./common/arch/arm64/configs/gki_defconfig || true
 
-          # 2. 强制 setlocalversion 脚本输出空字符串，移除所有 SCM/Git 状态和自定义版本号
-          # 覆盖原脚本，确保它不添加任何后缀
-          echo '#!/bin/bash' > ./common/scripts/setlocalversion
-          echo 'echo ""' >> ./common/scripts/setlocalversion
-          chmod +x ./common/scripts/setlocalversion
+          # 2. 移除原始脚本中所有自定义版本号和 zakozakoooooo-1145141919 后缀的逻辑
+          sed -i '/if \[ ! -z \$\{\{ inputs.version \}\} \]; then/,/fi/d' ./common/scripts/setlocalversion
+          sed -i '/echo "\$res-zakozakoooooo-1145141919"/d' ./common/scripts/setlocalversion
 
-          # 3. 移除 mkcompile_h 中的构建时间戳逻辑，保留 SMP PREEMPT
-          # SCM 提交或版本号的占位符将被空字符串取代，UTS_VERSION只剩下 "#1 SMP PREEMPT"
+          # 3. 移除 mkcompile_h 和 Makefile 中的时间戳和版本信息
+          # 移除 mkcompile_h 中的时间戳逻辑
           perl -pi -e 's{UTS_VERSION=\\\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\\| cut -b -\\\$UTS_LEN\)\\\"}{UTS_VERSION=\\\"#1 SMP PREEMPT\\\"}' ./common/scripts/mkcompile_h || true
 
-          # 4. 移除 Makefile 中的构建时间戳逻辑 (针对 6.1/6.6)
+          # 移除 init/Makefile 中的构建时间戳逻辑 (针对 6.1/6.6)
           if [ "${{ inputs.kernel_version }}" == "6.1" ] || [ "${{ inputs.kernel_version }}" == "6.6" ]; then
-            # 替换 init/Makefile 中可能存在的 build-timestamp
             sed -i -E "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"\"|" ./common/init/Makefile || true
           fi
           
-          # 5. 移除 Bazel/Kleaf 构建系统中的 "-maybe-dirty" SCM 标签
+          # 4. 移除 Bazel/Kleaf 构建系统中的 "-maybe-dirty" SCM 标签
           if [ ! -f "build/build.sh" ]; then
             sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel || true
             rm -rf ./common/android/abi_gki_protected_exports_* || true
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl || true
+          else
+            # 对于传统 kbuild (build.sh)，移除 setlocalversion 中的 -dirty 逻辑
+            sed -i 's/-dirty//' ./common/scripts/setlocalversion || true
           fi
 
       - name: Build with retry
@@ -640,7 +640,7 @@ jobs:
           echo "Checking if GKI kernel URL is reachable: $GKI_URL"
           status=$(curl -sL -w "%{http_code}" "$GKI_URL" -o /dev/null)
 
-          if [ "$status" == "200" ]; then
+          if [ "$status" = "200" ]; then
               echo "[+] Downloading from GKI_URL"
               curl -Lo gki-kernel.zip "$GKI_URL"
           else
