@@ -176,10 +176,10 @@ jobs:
           branch_input="${{ inputs.kernelsu_branch }}"
           variant_input="${{ inputs.kernelsu_variant }}"
           case "$branch_input" in
-            "Stable(标准)")
+            "Stable(标准)"
               echo "BRANCH=-s builtin" >> $GITHUB_ENV
               ;;
-            "Dev(开发)")
+            "Dev(开发)"
               case "$variant_input" in
                 "Official" | "MKSU") echo "BRANCH=-s main" >> $GITHUB_ENV ;;
                 "Next")              echo "BRANCH=-s next-susfs-dev" >> $GITHUB_ENV ;;
@@ -387,6 +387,9 @@ jobs:
           perl -pi -e "s{UTS_VERSION=\".*\"}{UTS_VERSION=\"#1 SMP PREEMPT $FIXED_TIME\"}" ./common/scripts/mkcompile_h || true
           if [ "\( {{ inputs.kernel_version }}" = "6.1" ] || [ " \){{ inputs.kernel_version }}" = "6.6" ]; then
             sed -i -e "s|.*build-timestamp.*|$FIXED_TIME|g" ./common/init/Makefile || true
+          fi
+          if [ ! -z ${{ inputs.version }} ]; then
+            sed -i '/^CONFIG_LOCALVERSION=/c\CONFIG_LOCALVERSION="-${{ inputs.version }}"' ./common/arch/arm64/configs/gki_defconfig || true
           fi
 
       - name: Build with retry
